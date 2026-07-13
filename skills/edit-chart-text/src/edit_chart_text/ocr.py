@@ -11,6 +11,10 @@ from PIL import Image
 from .models import TextCandidate
 
 
+class OCRBackendError(RuntimeError):
+    """Raised when the third-party OCR engine cannot be initialized."""
+
+
 class OCRBackend(Protocol):
     def detect(self, image_path: Path) -> tuple[TextCandidate, ...]: ...
 
@@ -95,12 +99,18 @@ class PaddleOCRBackend:
     def _default_predictor(self) -> Callable[[Path], Any]:
         from paddleocr import PaddleOCR  # lazy: optional models are expensive
 
-        engine = PaddleOCR(
-            use_doc_orientation_classify=False,
-            use_doc_unwarping=False,
-            use_textline_orientation=False,
-            enable_mkldnn=False,
-        )
+        try:
+            engine = PaddleOCR(
+                use_doc_orientation_classify=False,
+                use_doc_unwarping=False,
+                use_textline_orientation=False,
+                enable_mkldnn=False,
+            )
+        except Exception as error:
+            raise OCRBackendError(
+                "OCR initialization or model acquisition failed; "
+                "check local models/cache or network access."
+            ) from error
         return lambda path: engine.predict(str(path))
 
     def detect(self, image_path: Path) -> tuple[TextCandidate, ...]:

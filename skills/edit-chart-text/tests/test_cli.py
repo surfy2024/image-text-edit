@@ -1,7 +1,9 @@
 import json
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
+from PIL import Image
 import pytest
 
 import edit_chart_text.cli as cli
@@ -183,3 +185,36 @@ def test_main_rejects_selection_outside_scope_one_before_backend(
 
     assert main(["--request", str(request_path)]) == 2
     assert "scope=one" in capsys.readouterr().err
+
+
+def test_main_wraps_paddle_constructor_failure_without_traceback(
+    tmp_path, monkeypatch, capsys
+):
+    image_path = tmp_path / "chart.png"
+    Image.new("RGB", (20, 20), "white").save(image_path)
+    request_path = tmp_path / "request.json"
+    request_path.write_text(
+        json.dumps(
+            {
+                "image_path": image_path.name,
+                "replacements": [
+                    {"old_text": "HZ", "new_text": "CS", "scope": "one"}
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    class BrokenEngine:
+        def __init__(self, **kwargs):
+            raise Exception("No available model hosting platforms detected")
+
+    monkeypatch.setitem(
+        sys.modules, "paddleocr", SimpleNamespace(PaddleOCR=BrokenEngine)
+    )
+
+    assert main(["--request", str(request_path)]) == 4
+    error = capsys.readouterr().err
+    assert "OCR initialization or model acquisition failed" in error
+    assert "models/cache or network access" in error
+    assert "Traceback" not in error

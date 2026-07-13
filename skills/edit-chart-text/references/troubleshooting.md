@@ -7,7 +7,7 @@
 | invalid candidate fingerprint | 保留原图并读取最新 JSON 报告；确认编号与 polygon 成对来自同一记录且属于对应 `replacement_index`，再重写请求。 |
 | replacement does not fit | 缩短 `new_text`，或要求用户确认更大的目标区域后重试。 |
 | pixels changed outside | 停止发布结果并保留原图；缩小或重新确认目标框后重试。 |
-| OCR model unavailable | 检查 PaddleOCR 及模型是否可用；恢复模型访问后重新运行同一请求。Windows 中文用户路径相关错误见下方 ASCII 缓存设置。 |
+| OCR model unavailable | CLI 应以退出码 4 返回简洁错误；若提示模型托管平台不可用，检查本地模型缓存或网络后重试。Windows 中文用户路径相关错误见下方 ASCII 缓存设置。 |
 
 ## Windows 中文路径下的 Paddle 模型缓存
 

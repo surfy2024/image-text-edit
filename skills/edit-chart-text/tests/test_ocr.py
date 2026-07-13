@@ -38,6 +38,26 @@ def test_default_predictor_uses_chart_safe_cpu_options(monkeypatch) -> None:
         "path": "chart.png",
     }
 
+
+def test_default_predictor_wraps_third_party_constructor_errors(monkeypatch) -> None:
+    class BrokenEngine:
+        def __init__(self, **kwargs):
+            raise Exception("No available model hosting platforms detected")
+
+    monkeypatch.setitem(
+        sys.modules, "paddleocr", SimpleNamespace(PaddleOCR=BrokenEngine)
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="OCR initialization or model acquisition failed",
+    ) as raised:
+        PaddleOCRBackend()._default_predictor()
+
+    assert type(raised.value.__cause__) is Exception
+    assert "model hosting platforms" in str(raised.value.__cause__)
+
+
 def test_parser_handles_paddle3_mapping() -> None:
     result = parse_paddle_result([payload("A", .9, [[1, 2], [3, 2], [3, 4], [1, 4]])])
     assert result[0].text == "A"
