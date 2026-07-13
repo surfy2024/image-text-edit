@@ -42,6 +42,7 @@ class EditReport:
     run_id: str = ""
     source_sha256: str = ""
     source_path: str = ""
+    source_identity: dict = field(default_factory=dict)
     output_path: str | None = None
     report_path: str | None = None
     preview_path: str | None = None

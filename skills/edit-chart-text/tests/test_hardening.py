@@ -120,13 +120,13 @@ def test_confirmation_rejects_source_changed_after_report(tmp_path):
 
 def test_report_publish_is_last_marker_and_failure_only_cleans_own_run(tmp_path, monkeypatch):
     source=chart(tmp_path); other=tmp_path/"chart_other_edited.png"; other.write_bytes(b"other")
-    destinations=[]; real_replace=pipeline.os.replace
+    destinations=[]; real_link=pipeline.os.link
     def observe(src,dst):
         destinations.append(Path(dst))
         if Path(dst).name.endswith("_edit-report.json"):
             raise OSError("report marker failure")
-        return real_replace(src,dst)
-    monkeypatch.setattr(pipeline.os,"replace",observe)
+        return real_link(src,dst)
+    monkeypatch.setattr(pipeline.os,"link",observe)
     with pytest.raises(OSError,match="report marker failure"):
         run_pipeline(EditRequest(source,(Replacement("HZ","CS","one"),)), SequenceOCR((item(),),(item("CS"),)))
     assert other.read_bytes()==b"other"
@@ -164,7 +164,7 @@ def test_confirmation_rejects_report_with_mismatched_run_binding(tmp_path):
     request=EditRequest(source,(Replacement("HZ","CS","one",candidate_number=first.edits[0]["candidate_number"],candidate_polygon=tuple(map(tuple,first.edits[0]["polygon"])),candidate_token=first.edits[0]["candidate_token"]),),Path(first.report_path))
     result=run_pipeline(request,SequenceOCR((item(),)))
     assert result.status=="needs_confirmation"
-    assert "binding" in " ".join(result.messages).lower() or "run" in " ".join(result.messages).lower()
+    assert "authentication" in " ".join(result.messages).lower()
 
 
 def test_failed_geometry_report_keeps_source_digest(tmp_path):
@@ -208,7 +208,9 @@ def test_each_edit_requires_nonempty_pixel_diff(tmp_path):
 def test_lock_timeout_returns_clear_failed_report(tmp_path, monkeypatch):
     source=chart(tmp_path)
     monkeypatch.setattr(pipeline,"LOCK_TIMEOUT_SECONDS",.01)
-    lock=FileLock(str(source.with_name(f".{source.name}.edit-chart-text.lock")))
+    state=pipeline._state_dir()
+    identity=pipeline._prelock_identity(source)
+    lock=FileLock(str(pipeline._source_lock_path(source,identity,state)))
     with lock:
         result=run_pipeline(EditRequest(source,(Replacement("HZ","CS","one"),)),SequenceOCR((item(),),(item("CS"),)))
     assert result.status=="failed"
@@ -236,10 +238,10 @@ def test_predictable_run_id_collision_never_overwrites_existing_artifact(tmp_pat
     ids=iter((collided,fresh))
     monkeypatch.setattr(pipeline.secrets,"token_hex",lambda _n: next(ids))
     result=run_pipeline(EditRequest(source,(Replacement("HZ","CS","one"),)),SequenceOCR((item(),),(item("CS"),)))
-    assert result.status=="success"
-    assert result.run_id==fresh
+    assert result.status=="failed"
+    assert result.run_id==collided
     assert existing.read_bytes()==b"user-owned"
-    assert Path(result.output_path).exists()
+    assert Path(result.report_path).exists()
 
 
 def test_mid_reservation_collision_cleans_only_attempt_placeholders(tmp_path, monkeypatch):
@@ -249,9 +251,8 @@ def test_mid_reservation_collision_cleans_only_attempt_placeholders(tmp_path, mo
     existing_report.write_bytes(b"user-report")
     ids=iter((collided,fresh))
     monkeypatch.setattr(pipeline.secrets,"token_hex",lambda _n: next(ids))
-    result=run_pipeline(EditRequest(source,(Replacement("HZ","CS","one"),)),SequenceOCR((item(),),(item("CS"),)))
-    assert result.status=="success"
-    assert result.run_id==fresh
+    with pytest.raises(OSError):
+        run_pipeline(EditRequest(source,(Replacement("HZ","CS","one"),)),SequenceOCR((item(),),(item("CS"),)))
     assert existing_report.read_bytes()==b"user-report"
     assert not (tmp_path/f"chart_{collided}_edited.png").exists()
 

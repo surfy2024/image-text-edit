@@ -32,9 +32,9 @@ def confirm(source, first, index, old="HZ", new="CS"):
 
 
 def test_success_preserves_source_and_publishes_unique_report_last(tmp_path, monkeypatch):
-    source=chart(tmp_path); original=source.read_bytes(); destinations=[]; real=pipeline.os.replace
+    source=chart(tmp_path); original=source.read_bytes(); destinations=[]; real=pipeline.os.link
     def observe(src,dst): destinations.append(Path(dst)); return real(src,dst)
-    monkeypatch.setattr(pipeline.os,"replace",observe)
+    monkeypatch.setattr(pipeline.os,"link",observe)
     report=run_pipeline(EditRequest(source,(Replacement("HZ","CS","one"),)),SequenceOCR((candidate(),),(candidate("CS"),)))
     assert report.status=="success"
     assert source.read_bytes()==original
@@ -86,11 +86,11 @@ def test_overlapping_ready_candidates_require_confirmation_before_edit(tmp_path)
 
 
 def test_report_failure_cleans_only_this_runs_output_and_chains_processing_error(tmp_path,monkeypatch):
-    source=chart(tmp_path); other=tmp_path/"chart_other_edited.png"; other.write_bytes(b"keep"); real=pipeline.os.replace
+    source=chart(tmp_path); other=tmp_path/"chart_other_edited.png"; other.write_bytes(b"keep"); real=pipeline.os.link
     def fail(src,dst):
         if Path(dst).name.endswith("_edit-report.json"): raise OSError("report failed")
         return real(src,dst)
-    monkeypatch.setattr(pipeline.os,"replace",fail)
+    monkeypatch.setattr(pipeline.os,"link",fail)
     with pytest.raises(OSError,match="report failed"):
         run_pipeline(EditRequest(source,(Replacement("HZ","CS","one"),)),SequenceOCR((candidate(),),(candidate("CS"),)))
     assert other.read_bytes()==b"keep"
@@ -98,13 +98,13 @@ def test_report_failure_cleans_only_this_runs_output_and_chains_processing_error
 
 
 def test_report_failure_chains_original_ocr_error(tmp_path,monkeypatch):
-    source=chart(tmp_path); real=pipeline.os.replace
+    source=chart(tmp_path); real=pipeline.os.link
     class Broken:
         def detect(self,_): raise ValueError("ocr failed")
     def fail(src,dst):
         if Path(dst).name.endswith("_edit-report.json"): raise OSError("report failed")
         return real(src,dst)
-    monkeypatch.setattr(pipeline.os,"replace",fail)
+    monkeypatch.setattr(pipeline.os,"link",fail)
     with pytest.raises(OSError) as raised:
         run_pipeline(EditRequest(source,(Replacement("HZ","CS","one"),)),Broken())
     assert isinstance(raised.value.__cause__,ValueError)
