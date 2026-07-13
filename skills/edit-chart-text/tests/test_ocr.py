@@ -6,7 +6,7 @@ from types import SimpleNamespace
 from PIL import Image
 import pytest
 
-from edit_chart_text.ocr import PaddleOCRBackend, parse_paddle_result
+from edit_chart_text.ocr import OCRBackendError, PaddleOCRBackend, parse_paddle_result
 
 
 def payload(text: str, score: float, box: list[list[float]]) -> dict:
@@ -49,13 +49,39 @@ def test_default_predictor_wraps_third_party_constructor_errors(monkeypatch) -> 
     )
 
     with pytest.raises(
-        RuntimeError,
+        OCRBackendError,
         match="OCR initialization or model acquisition failed",
     ) as raised:
         PaddleOCRBackend()._default_predictor()
 
+    assert type(raised.value) is OCRBackendError
     assert type(raised.value.__cause__) is Exception
     assert "model hosting platforms" in str(raised.value.__cause__)
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        AssertionError("programming invariant failed"),
+        TypeError("constructor contract bug"),
+        Exception("unexpected third-party bug"),
+    ],
+)
+def test_default_predictor_does_not_wrap_programming_or_unknown_errors(
+    monkeypatch, error
+) -> None:
+    class BrokenEngine:
+        def __init__(self, **kwargs):
+            raise error
+
+    monkeypatch.setitem(
+        sys.modules, "paddleocr", SimpleNamespace(PaddleOCR=BrokenEngine)
+    )
+
+    with pytest.raises(type(error)) as raised:
+        PaddleOCRBackend()._default_predictor()
+
+    assert raised.value is error
 
 
 def test_parser_handles_paddle3_mapping() -> None:

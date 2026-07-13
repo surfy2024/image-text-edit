@@ -107,6 +107,14 @@ class PaddleOCRBackend:
                 enable_mkldnn=False,
             )
         except Exception as error:
+            normalized_message = " ".join(str(error).split()).casefold()
+            known_model_hosting_failure = type(error) is Exception and (
+                "no available model hosting platforms detected" in normalized_message
+            )
+            if not isinstance(error, (OSError, ImportError, RuntimeError)) and not (
+                known_model_hosting_failure
+            ):
+                raise
             raise OCRBackendError(
                 "OCR initialization or model acquisition failed; "
                 "check local models/cache or network access."
