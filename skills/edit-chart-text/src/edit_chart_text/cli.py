@@ -2,7 +2,6 @@
 
 import argparse
 from collections.abc import Sequence
-from pathlib import Path
 import sys
 
 from .ocr import PaddleOCRBackend
@@ -14,14 +13,6 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="edit-chart-text")
     parser.add_argument("--request", required=True, help="path to UTF-8 request JSON")
     return parser
-
-
-def _artifact_paths(image_path: Path) -> tuple[Path, Path, Path]:
-    return (
-        image_path.with_name(f"{image_path.stem}_edited.png"),
-        image_path.with_name(f"{image_path.stem}_edit-report.json"),
-        image_path.with_name(f"{image_path.stem}_candidates.png"),
-    )
 
 
 def _error(message: str) -> None:
@@ -49,9 +40,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         _error(f"processing failed: {error}")
         return 4
 
-    output_path, report_path, preview_path = _artifact_paths(request.image_path)
+    report_path = getattr(report, "report_path", None)
+    preview_path = getattr(report, "preview_path", None)
     if report.status == "success":
-        print(f"output: {report.output_path or output_path}")
+        print(f"output: {report.output_path}")
         print(f"report: {report_path}")
         return 0
     if report.status == "needs_confirmation":

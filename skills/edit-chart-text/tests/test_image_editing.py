@@ -23,9 +23,14 @@ def text_image(background=(245, 245, 245), color=(20, 40, 80)):
     return im
 
 
-def test_candidate_bounds_are_clamped_to_image():
-    c = candidate((-4, 3, 60, 40))
-    assert candidate_bounds(c, (50, 32)) == (0, 3, 50, 32)
+@pytest.mark.parametrize("box", [(-1, 3, 20, 15), (3, -1, 20, 15), (3, 3, 50, 15), (3, 3, 20, 32), (60, 40, 70, 50)])
+def test_candidate_bounds_reject_any_out_of_image_vertex(box):
+    with pytest.raises(ValueError, match="inside image"):
+        candidate_bounds(candidate(box), (50, 32))
+
+
+def test_candidate_bounds_accept_valid_edge_touching_polygon():
+    assert candidate_bounds(candidate((0, 0, 49, 31)), (50, 32)) == (0, 0, 49, 31)
 
 
 def test_estimates_glyph_color_and_integer_font_size():
@@ -157,3 +162,14 @@ def test_real_long_label_repair_removes_antialiased_glyph_ghosts():
         repaired_patch.astype(float) - border_interpolation, axis=2
     )[:, 2:88]
     assert np.percentile(block_deviation, 90) < 7.0
+
+
+def test_rgba_repair_and_render_preserve_alpha_everywhere():
+    rgba = text_image().convert("RGBA")
+    alpha = np.arange(rgba.width * rgba.height, dtype=np.uint16).reshape(rgba.height, rgba.width) % 256
+    rgba.putalpha(Image.fromarray(alpha.astype(np.uint8)))
+    item = candidate()
+    repaired, allowed, _ = repair_region(rgba, item)
+    output = render_replacement(repaired, item, "CS", estimate_style(rgba, item), allowed)
+    assert output.mode == "RGBA"
+    assert np.array_equal(np.asarray(output)[:, :, 3], alpha.astype(np.uint8))

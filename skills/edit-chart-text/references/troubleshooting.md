@@ -3,7 +3,7 @@
 | 问题 | 明确下一步 |
 | --- | --- |
 | not found | 核对 `old_text` 是否与图片文字一致后重试。仅把 `location_hint` 当作人工诊断上下文；不要把它当作自动筛选条件。 |
-| multiple matches | 展示候选预览和数量；用户选编号后，从 JSON 报告同一记录复制 `candidate_number`、`polygon` 与 `replacement_index`，在对应 replacement 设置 `scope=one` 和两项候选字段后重试。只有用户明确要求时才设置 `scope=all`。 |
+| multiple matches | 展示候选预览和数量；用户选编号后，从 CLI 返回的 JSON 报告同一记录复制 `candidate_token`、`candidate_number`、`polygon` 与 `replacement_index`，顶层设置 `confirmation_report_path`，保持 replacement 顺序并在对应项设置 `scope=one` 后重试。只有用户明确要求时才设置 `scope=all`。 |
 | invalid candidate fingerprint | 保留原图并读取最新 JSON 报告；确认编号与 polygon 成对来自同一记录且属于对应 `replacement_index`，再重写请求。 |
 | replacement does not fit | 缩短 `new_text`，或要求用户确认更大的目标区域后重试。 |
 | pixels changed outside | 停止发布结果并保留原图；缩小或重新确认目标框后重试。 |
@@ -32,3 +32,11 @@ python -m pytest -m integration tests/test_real_fixture.py
 ```
 
 运行结束后删除测试专用模型缓存和 pytest 临时目录。
+
+## 默认 CPU 与 GPU 引擎
+
+默认安装包含兼容的 PaddlePaddle 3.x CPU 引擎。需要 GPU 时，应按 Paddle 官方兼容矩阵卸载 CPU wheel 并安装与本机 CUDA 匹配的 `paddlepaddle-gpu`，不要同时保留两个引擎包。
+
+## 同源锁超时
+
+同一源图的 digest、OCR、编辑、验证和发布由跨进程锁串行化。若报告提示等待源图锁超时，确认没有仍在运行的编辑进程后重试；不要删除或覆盖任何带其他 `run_id` 的产物。

@@ -43,6 +43,7 @@ def repair_text_region(image: Image.Image, candidate: TextCandidate, padding: in
         raise ValueError("candidate is empty or outside image")
     allowed = _allowed(box, image.size, max(0, int(padding)))
     al, at, ar, ab = allowed
+    alpha = image.getchannel("A").copy() if image.mode == "RGBA" else None
     original = np.asarray(image.convert("RGB")); patch = original[at:ab, al:ar].copy()
     # Estimate background from the permitted patch border, then isolate glyph-like pixels.
     border = np.concatenate((patch[0], patch[-1], patch[:, 0], patch[:, -1]))
@@ -91,7 +92,10 @@ def repair_text_region(image: Image.Image, candidate: TextCandidate, padding: in
             y = np.linspace(0, 1, patch.shape[0])[:, None]
             result_patch[:, column] = patch[0, column] * (1 - y) + patch[-1, column] * y
     result = original.copy(); result[at:ab, al:ar] = result_patch
-    return Image.fromarray(result), allowed, method
+    output = Image.fromarray(result)
+    if alpha is not None:
+        output.putalpha(alpha)
+    return output, allowed, method
 
 def repair_region(image: Image.Image, candidate: TextCandidate, padding: int = 2):
     """Repair a candidate through the stable pipeline-facing API."""

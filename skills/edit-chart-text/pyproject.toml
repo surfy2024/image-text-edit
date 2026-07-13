@@ -11,6 +11,8 @@ dependencies = [
     "opencv-python-headless>=4.10",
     "Pillow>=11.0",
     "paddleocr>=3.0",
+    "paddlepaddle>=3.0,<4",
+    "filelock>=3.16,<4",
 ]
 
 [project.optional-dependencies]

@@ -70,19 +70,19 @@ def test_real_chart_fixture_detects_and_edits_without_mutating_source(tmp_path):
     assert not_found.status == "needs_confirmation", not_found.messages
     assert not_found.edits == []
     assert source.read_bytes() == original
-    assert not (tmp_path / "chart_sample_edited.png").exists()
+    assert not tuple(tmp_path.glob("chart_sample_*_edited.png"))
 
     edit_request_path = _write_request(
         tmp_path / "chart_sample_edit_request.json",
         source.name,
         "HYSY FPSO",
-        "CS",
+        "TEST",
     )
     edited_report = run_pipeline(load_request(edit_request_path), backend)
 
-    edited_path = tmp_path / "chart_sample_edited.png"
-    report_path = tmp_path / "chart_sample_edit-report.json"
     assert edited_report.status == "success", edited_report.messages
+    edited_path = Path(edited_report.output_path)
+    report_path = Path(edited_report.report_path)
     assert source.read_bytes() == original
     assert edited_path.exists()
     assert report_path.exists()
@@ -94,6 +94,9 @@ def test_real_chart_fixture_detects_and_edits_without_mutating_source(tmp_path):
     report_payload = json.loads(report_path.read_text(encoding="utf-8"))
     assert report_payload["status"] == "success"
     assert report_payload["edits"][0]["polygon"] == edit["polygon"]
+    assert edit["post_ocr_validation"]["passed"] is True
+    post_candidates = backend.detect(edited_path)
+    assert any(candidate.text == "TEST" and candidate.confidence >= 0.50 for candidate in post_candidates)
 
     with Image.open(source) as before_image, Image.open(edited_path) as after_image:
         before = np.asarray(before_image.convert("RGB"))

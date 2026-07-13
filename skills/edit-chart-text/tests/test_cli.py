@@ -15,6 +15,8 @@ def report(status, image_path, *, messages=None, output_path=None):
         status=status,
         messages=messages or [],
         output_path=output_path,
+        report_path=str(Path(image_path).with_name("chart_run_edit-report.json")),
+        preview_path=str(Path(image_path).with_name("chart_run_candidates.png")),
     )
 
 
@@ -78,7 +80,7 @@ def test_main_uses_real_request_loader_with_fake_backend(tmp_path, monkeypatch, 
     assert seen["backend"] is backend
     output = capsys.readouterr().out
     assert "chart_edited.png" in output
-    assert "chart_edit-report.json" in output
+    assert "edit-report.json" in output
 
 
 @pytest.mark.parametrize(
@@ -132,7 +134,7 @@ def test_main_failed_report_prints_messages_and_report_path(monkeypatch, capsys,
     assert main(["--request", "request.json"]) == 4
     error = capsys.readouterr().err
     assert "安全校验失败" in error
-    assert "chart_edit-report.json" in error
+    assert "edit-report.json" in error
 
 
 def test_main_needs_confirmation_prints_report_and_candidates_paths(monkeypatch, capsys, tmp_path):
@@ -140,8 +142,8 @@ def test_main_needs_confirmation_prints_report_and_candidates_paths(monkeypatch,
 
     assert main(["--request", "request.json"]) == 3
     output = capsys.readouterr().out
-    assert "chart_candidates.png" in output
-    assert "chart_edit-report.json" in output
+    assert "_candidates.png" in output
+    assert "edit-report.json" in output
 
 
 def test_main_unknown_status_is_protocol_error(monkeypatch, capsys, tmp_path):

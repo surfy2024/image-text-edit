@@ -141,6 +141,7 @@ def test_load_request_preserves_candidate_fingerprint_and_defaults_to_none(tmp_p
         tmp_path,
         {
             "image_path": "chart.png",
+            "confirmation_report_path": "prior.json",
             "replacements": [
                 {
                     "old_text": "HZ",
@@ -148,6 +149,7 @@ def test_load_request_preserves_candidate_fingerprint_and_defaults_to_none(tmp_p
                     "scope": "one",
                     "candidate_number": 2,
                     "candidate_polygon": polygon,
+                    "candidate_token": "secure-token-value",
                 },
                 {"old_text": "P10", "new_text": "P20"},
             ],
@@ -160,6 +162,7 @@ def test_load_request_preserves_candidate_fingerprint_and_defaults_to_none(tmp_p
     assert request.replacements[0].candidate_polygon == tuple(
         tuple(point) for point in polygon
     )
+    assert request.replacements[0].candidate_token == "secure-token-value"
     assert request.replacements[1].candidate_number is None
     assert request.replacements[1].candidate_polygon is None
 
@@ -262,3 +265,36 @@ def test_load_request_rejects_invalid_candidate_polygon(tmp_path, polygon) -> No
 
     with pytest.raises(ValueError, match="candidate_polygon"):
         load_request(request_path)
+
+
+def test_load_request_requires_report_token_number_and_polygon_as_one_selection(tmp_path):
+    base = {
+        "old_text": "HZ", "new_text": "CS", "scope": "one",
+        "candidate_number": 1,
+        "candidate_polygon": [[10, 10], [30, 10], [30, 24], [10, 24]],
+    }
+    for missing in ("confirmation_report_path", "candidate_token"):
+        payload = {"image_path": "chart.png", "confirmation_report_path": "prior.json",
+                   "replacements": [{**base, "candidate_token": "secure-token-value"}]}
+        if missing == "confirmation_report_path":
+            payload.pop(missing)
+        else:
+            payload["replacements"][0].pop(missing)
+        path = write_request(tmp_path, payload)
+        with pytest.raises(ValueError, match=missing):
+            load_request(path)
+
+
+def test_load_request_preserves_confirmation_report_and_token(tmp_path):
+    path = write_request(tmp_path, {
+        "image_path": "chart.png",
+        "confirmation_report_path": "chart_run_edit-report.json",
+        "replacements": [{
+            "old_text": "HZ", "new_text": "CS", "scope": "one",
+            "candidate_number": 1, "candidate_token": "secure-token-value",
+            "candidate_polygon": [[10, 10], [30, 10], [30, 24], [10, 24]],
+        }],
+    })
+    request = load_request(path)
+    assert request.confirmation_report_path == (tmp_path / "chart_run_edit-report.json").resolve()
+    assert request.replacements[0].candidate_token == "secure-token-value"

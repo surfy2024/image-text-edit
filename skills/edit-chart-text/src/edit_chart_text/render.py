@@ -42,8 +42,11 @@ def render_text(image: Image.Image, text: str, style: TextStyle, target_bounds, 
     font, tw, th, bbox = chosen
     x = min(max(tl, al), ar-tw)
     y = min(max(tt, at), ab-th) - bbox[1]
+    alpha = image.getchannel("A").copy() if image.mode == "RGBA" else None
     out = image.convert("RGB").copy()
     ImageDraw.Draw(out).text((x, y), text, font=font, fill=style.color_rgb)
+    if alpha is not None:
+        out.putalpha(alpha)
     return out
 
 

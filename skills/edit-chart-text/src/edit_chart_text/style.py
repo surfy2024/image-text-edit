@@ -7,12 +7,16 @@ from .models import TextCandidate, TextStyle
 
 
 def candidate_bounds(candidate: TextCandidate, image_size: tuple[int, int]) -> tuple[int, int, int, int]:
-    if not candidate.polygon:
-        raise ValueError("candidate has no polygon")
+    if len(candidate.polygon) < 4 or len(set(candidate.polygon)) < 4:
+        raise ValueError("candidate polygon must have at least four distinct points")
     width, height = image_size
+    if width <= 0 or height <= 0 or any(x < 0 or y < 0 or x >= width or y >= height for x, y in candidate.polygon):
+        raise ValueError("candidate polygon must be fully inside image")
+    twice_area = abs(sum(x1*y2-x2*y1 for (x1,y1),(x2,y2) in zip(candidate.polygon, candidate.polygon[1:]+candidate.polygon[:1])))
+    if twice_area == 0:
+        raise ValueError("candidate polygon has zero area")
     xs, ys = zip(*candidate.polygon)
-    return (min(width, max(0, min(xs))), min(height, max(0, min(ys))),
-            min(width, max(0, max(xs))), min(height, max(0, max(ys))))
+    return min(xs), min(ys), max(xs), max(ys)
 
 
 def estimate_text_style(image: Image.Image, candidate: TextCandidate) -> TextStyle:
