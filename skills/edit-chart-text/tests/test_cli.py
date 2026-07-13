@@ -1,9 +1,38 @@
+import json
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 import edit_chart_text.cli as cli
 from edit_chart_text.cli import main
+
+
+def report(status, image_path, *, messages=None, output_path=None):
+    return SimpleNamespace(
+        status=status,
+        messages=messages or [],
+        output_path=output_path,
+    )
+
+
+def install_successful_dependencies(monkeypatch, tmp_path, status="success"):
+    request = SimpleNamespace(image_path=tmp_path / "chart.png")
+    backend = object()
+    monkeypatch.setattr(cli, "load_request", lambda _path: request)
+    monkeypatch.setattr(cli, "PaddleOCRBackend", lambda: backend)
+    monkeypatch.setattr(
+        cli,
+        "run_pipeline",
+        lambda actual_request, actual_backend: report(
+            status,
+            request.image_path,
+            output_path=str(tmp_path / "chart_edited.png"),
+        )
+        if (actual_request, actual_backend) == (request, backend)
+        else None,
+    )
+    return request
 
 
 def test_main_requires_request_argument():
@@ -20,38 +49,101 @@ def test_main_reports_invalid_request(monkeypatch, capsys):
     assert "replacement list must not be empty" in capsys.readouterr().err
 
 
-def test_main_reports_pipeline_io_error(monkeypatch, capsys):
-    monkeypatch.setattr(cli, "load_request", lambda _path: object())
-    monkeypatch.setattr(cli, "PaddleOCRBackend", lambda: object())
+def test_main_uses_real_request_loader_with_fake_backend(tmp_path, monkeypatch, capsys):
+    request_path = tmp_path / "request.json"
+    request_path.write_text(
+        json.dumps(
+            {
+                "image_path": str(tmp_path / "chart.png"),
+                "replacements": [{"old_text": "HZ", "new_text": "CS"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    backend = object()
+    seen = {}
+    monkeypatch.setattr(cli, "PaddleOCRBackend", lambda: backend)
 
-    def unavailable(_request, _backend):
-        raise OSError("OCR model unavailable")
+    def fake_pipeline(request, actual_backend):
+        seen["request"] = request
+        seen["backend"] = actual_backend
+        return report("success", request.image_path, output_path=str(tmp_path / "chart_edited.png"))
 
-    monkeypatch.setattr(cli, "run_pipeline", unavailable)
+    monkeypatch.setattr(cli, "run_pipeline", fake_pipeline)
 
-    assert main(["--request", "request.json"]) == 2
-    assert "OCR model unavailable" in capsys.readouterr().err
+    assert main(["--request", str(request_path)]) == 0
+    assert seen["request"].replacements[0].old_text == "HZ"
+    assert seen["backend"] is backend
+    output = capsys.readouterr().out
+    assert "chart_edited.png" in output
+    assert "chart_edit-report.json" in output
 
 
 @pytest.mark.parametrize(
-    ("status", "exit_code"),
-    [("success", 0), ("needs_confirmation", 3), ("failed", 4)],
+    "error",
+    [ImportError("paddle unavailable"), ModuleNotFoundError("paddleocr"), RuntimeError("model failed")],
 )
-def test_main_maps_report_status_to_exit_code(
-    monkeypatch, status, exit_code
-):
-    request = object()
-    backend = object()
-    monkeypatch.setattr(cli, "load_request", lambda _path: request)
-    monkeypatch.setattr(cli, "PaddleOCRBackend", lambda: backend)
+def test_main_reports_backend_initialization_errors(monkeypatch, capsys, error):
+    monkeypatch.setattr(
+        cli,
+        "load_request",
+        lambda _path: SimpleNamespace(image_path=Path("chart.png")),
+    )
+
+    def fail_backend():
+        raise error
+
+    monkeypatch.setattr(cli, "PaddleOCRBackend", fail_backend)
+
+    assert main(["--request", "request.json"]) == 4
+    assert str(error) in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("error", [OSError("OCR unavailable"), ValueError("bad OCR result"), RuntimeError("model failed")])
+def test_main_reports_pipeline_runtime_errors(monkeypatch, capsys, error):
+    monkeypatch.setattr(
+        cli,
+        "load_request",
+        lambda _path: SimpleNamespace(image_path=Path("chart.png")),
+    )
+    monkeypatch.setattr(cli, "PaddleOCRBackend", lambda: object())
+
+    def fail_pipeline(_request, _backend):
+        raise error
+
+    monkeypatch.setattr(cli, "run_pipeline", fail_pipeline)
+
+    assert main(["--request", "request.json"]) == 4
+    assert str(error) in capsys.readouterr().err
+
+
+def test_main_failed_report_prints_messages_and_report_path(monkeypatch, capsys, tmp_path):
+    request = install_successful_dependencies(monkeypatch, tmp_path, "failed")
     monkeypatch.setattr(
         cli,
         "run_pipeline",
-        lambda actual_request, actual_backend: (
-            SimpleNamespace(status=status)
-            if (actual_request, actual_backend) == (request, backend)
-            else None
+        lambda _request, _backend: report(
+            "failed", request.image_path, messages=["安全校验失败"]
         ),
     )
 
-    assert main(["--request", "request.json"]) == exit_code
+    assert main(["--request", "request.json"]) == 4
+    error = capsys.readouterr().err
+    assert "安全校验失败" in error
+    assert "chart_edit-report.json" in error
+
+
+def test_main_needs_confirmation_prints_report_and_candidates_paths(monkeypatch, capsys, tmp_path):
+    install_successful_dependencies(monkeypatch, tmp_path, "needs_confirmation")
+
+    assert main(["--request", "request.json"]) == 3
+    output = capsys.readouterr().out
+    assert "chart_candidates.png" in output
+    assert "chart_edit-report.json" in output
+
+
+def test_main_unknown_status_is_protocol_error(monkeypatch, capsys, tmp_path):
+    install_successful_dependencies(monkeypatch, tmp_path, "surprise")
+
+    assert main(["--request", "request.json"]) == 4
+    assert "protocol" in capsys.readouterr().err.lower()

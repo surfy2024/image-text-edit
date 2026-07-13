@@ -1,14 +1,16 @@
 from pathlib import Path
 from typing import get_type_hints
 
-from edit_chart_text.models import EditReport, TextCandidate, TextStyle
+from edit_chart_text.models import EditReport, Replacement, TextCandidate, TextStyle
 
 
 def test_model_field_types_match_pipeline_contract() -> None:
+    replacement_hints = get_type_hints(Replacement)
     candidate_hints = get_type_hints(TextCandidate)
     style_hints = get_type_hints(TextStyle)
     report_hints = get_type_hints(EditReport)
 
+    assert replacement_hints["candidate_number"] == int | None
     assert candidate_hints["polygon"] == tuple[tuple[int, int], ...]
     assert style_hints["font_size"] is int
     assert report_hints["output_path"] == str | None

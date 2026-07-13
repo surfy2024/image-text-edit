@@ -133,3 +133,43 @@ def test_load_request_rejects_non_string_scope(tmp_path, scope) -> None:
     request_path = write_request(tmp_path, {"image_path": "chart.png", "replacements": [{"old_text": "P10", "new_text": "P40", "scope": scope}]})
     with pytest.raises(ValueError, match="scope"):
         load_request(request_path)
+
+
+def test_load_request_preserves_candidate_number_and_defaults_to_none(tmp_path) -> None:
+    request_path = write_request(
+        tmp_path,
+        {
+            "image_path": "chart.png",
+            "replacements": [
+                {"old_text": "HZ", "new_text": "CS", "candidate_number": 2},
+                {"old_text": "P10", "new_text": "P20"},
+            ],
+        },
+    )
+
+    request = load_request(request_path)
+
+    assert request.replacements[0].candidate_number == 2
+    assert request.replacements[1].candidate_number is None
+
+
+@pytest.mark.parametrize("candidate_number", [None, True, False, 0, -1, 1.5, "2"])
+def test_load_request_rejects_invalid_candidate_number(
+    tmp_path, candidate_number
+) -> None:
+    request_path = write_request(
+        tmp_path,
+        {
+            "image_path": "chart.png",
+            "replacements": [
+                {
+                    "old_text": "HZ",
+                    "new_text": "CS",
+                    "candidate_number": candidate_number,
+                }
+            ],
+        },
+    )
+
+    with pytest.raises(ValueError, match="candidate_number"):
+        load_request(request_path)

@@ -62,9 +62,16 @@ def _load_replacement(item: Any, index: int) -> Replacement:
             )
         location_hint = location_hint.strip()
 
+    candidate_number = item.get("candidate_number")
+    if "candidate_number" in item and (
+        type(candidate_number) is not int or candidate_number <= 0
+    ):
+        raise ValueError(f"{context}.candidate_number must be a positive integer")
+
     return Replacement(
         old_text=old_text.strip(),
         new_text=new_text.strip(),
         scope=scope,
         location_hint=location_hint,
+        candidate_number=candidate_number,
     )

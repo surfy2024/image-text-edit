@@ -290,3 +290,66 @@ def test_padding_overlap_needs_confirmation_before_any_edit(tmp_path):
     assert not (tmp_path / "chart_edited.png").exists()
     assert (tmp_path / "chart_candidates.png").exists()
     assert [item["replacement_index"] for item in report.edits] == [0, 1]
+
+
+def test_candidate_number_closes_ambiguity_loop_and_edits_only_selected_candidate(
+    tmp_path,
+):
+    source = chart(tmp_path)
+    initial = EditRequest(source, (Replacement("HZ", "CS", "ask"),))
+
+    first_report = run_pipeline(initial, AmbiguousOCR())
+    first_payload = json.loads(
+        (tmp_path / "chart_edit-report.json").read_text(encoding="utf-8")
+    )
+    selected = first_payload["edits"][1]
+
+    assert first_report.status == "needs_confirmation"
+    assert selected["candidate_number"] == 2
+
+    confirmed = EditRequest(
+        source,
+        (Replacement("HZ", "CS", "one", candidate_number=2),),
+    )
+    second_report = run_pipeline(confirmed, AmbiguousOCR())
+
+    second_payload = json.loads(
+        (tmp_path / "chart_edit-report.json").read_text(encoding="utf-8")
+    )
+    expected_polygon = [list(point) for point in candidate(40).polygon]
+    assert second_report.status == "success"
+    assert len(second_report.edits) == 1
+    assert len(second_payload["edits"]) == 1
+    assert second_report.edits[0]["polygon"] == selected["polygon"]
+    assert second_payload["edits"][0]["polygon"] == expected_polygon
+
+
+def test_unknown_candidate_number_does_not_edit(tmp_path):
+    source = chart(tmp_path)
+    request = EditRequest(
+        source,
+        (Replacement("HZ", "CS", "one", candidate_number=99),),
+    )
+
+    report = run_pipeline(request, AmbiguousOCR())
+
+    assert report.status == "needs_confirmation"
+    assert not (tmp_path / "chart_edited.png").exists()
+    assert any("99" in message and "不存在" in message for message in report.messages)
+
+
+def test_candidate_number_owned_by_other_replacement_does_not_edit(tmp_path):
+    source = chart(tmp_path)
+    request = EditRequest(
+        source,
+        (
+            Replacement("HZ", "CS", "one", candidate_number=3),
+            Replacement("P10", "P20", "ask"),
+        ),
+    )
+
+    report = run_pipeline(request, MultiAmbiguousOCR())
+
+    assert report.status == "needs_confirmation"
+    assert not (tmp_path / "chart_edited.png").exists()
+    assert any("3" in message and "不属于" in message for message in report.messages)
