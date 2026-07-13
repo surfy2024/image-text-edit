@@ -51,6 +51,21 @@ class OverlappingOCR:
         )
 
 
+class SameScopeOverlappingOCR:
+    def detect(self, image_path):
+        return (candidate(), candidate(25))
+
+
+class PaddingOnlyOverlapOCR:
+    def detect(self, image_path):
+        return (
+            candidate(),
+            TextCandidate(
+                "P10", ((33, 10), (53, 10), (53, 24), (33, 24)), 0.99
+            ),
+        )
+
+
 def chart(tmp_path):
     path = tmp_path / "chart.png"
     image = Image.new("RGB", (80, 40), "white")
@@ -241,3 +256,37 @@ def test_run_does_not_delete_another_runs_unique_temp_file(tmp_path):
 
     assert report.status == "success"
     assert concurrent_temp.read_bytes() == b"in progress"
+
+
+def test_overlapping_candidates_within_one_all_replacement_need_confirmation(tmp_path):
+    source = chart(tmp_path)
+    original = source.read_bytes()
+    request = EditRequest(source, (Replacement("HZ", "CS", "all"),))
+
+    report = run_pipeline(request, SameScopeOverlappingOCR())
+
+    assert report.status == "needs_confirmation"
+    assert source.read_bytes() == original
+    assert not (tmp_path / "chart_edited.png").exists()
+    assert (tmp_path / "chart_candidates.png").exists()
+    assert [item["candidate_number"] for item in report.edits] == [1, 2]
+
+
+def test_padding_overlap_needs_confirmation_before_any_edit(tmp_path):
+    source = chart(tmp_path)
+    original = source.read_bytes()
+    request = EditRequest(
+        source,
+        (
+            Replacement("HZ", "CS", "one"),
+            Replacement("P10", "P20", "one"),
+        ),
+    )
+
+    report = run_pipeline(request, PaddingOnlyOverlapOCR())
+
+    assert report.status == "needs_confirmation"
+    assert source.read_bytes() == original
+    assert not (tmp_path / "chart_edited.png").exists()
+    assert (tmp_path / "chart_candidates.png").exists()
+    assert [item["replacement_index"] for item in report.edits] == [0, 1]

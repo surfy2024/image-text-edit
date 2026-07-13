@@ -16,6 +16,9 @@ from .style import candidate_bounds, estimate_style
 from .validate import unchanged_outside
 
 
+EDIT_PADDING = 2
+
+
 def _paths(source: Path) -> tuple[Path, Path, Path]:
     directory = source.parent
     return (
@@ -142,13 +145,27 @@ def _confirmation_report(
     return _candidate_preview_report(image, entries, preview_path, messages)
 
 
+def _planned_edit_bounds(
+    candidate: TextCandidate,
+    image_size: tuple[int, int],
+) -> tuple[int, int, int, int]:
+    left, top, right, bottom = candidate_bounds(candidate, image_size)
+    width, height = image_size
+    return (
+        max(0, left - EDIT_PADDING),
+        max(0, top - EDIT_PADDING),
+        min(width, right + EDIT_PADDING),
+        min(height, bottom + EDIT_PADDING),
+    )
+
+
 def _overlap(
     left: TextCandidate,
     right: TextCandidate,
     image_size: tuple[int, int],
 ) -> bool:
-    left_l, left_t, left_r, left_b = candidate_bounds(left, image_size)
-    right_l, right_t, right_r, right_b = candidate_bounds(right, image_size)
+    left_l, left_t, left_r, left_b = _planned_edit_bounds(left, image_size)
+    right_l, right_t, right_r, right_b = _planned_edit_bounds(right, image_size)
     return (
         min(left_r, right_r) > max(left_l, right_l)
         and min(left_b, right_b) > max(left_t, right_t)
@@ -170,9 +187,7 @@ def _conflict_report(
     for left_position, left in enumerate(entries):
         for right_position in range(left_position + 1, len(entries)):
             right = entries[right_position]
-            if left[0] == right[0] or not _overlap(
-                left[2], right[2], image.size
-            ):
+            if not _overlap(left[2], right[2], image.size):
                 continue
             conflicting.update((left_position, right_position))
             messages.append(
@@ -202,7 +217,9 @@ def _ready_report(
     for replacement, decision in decisions:
         for candidate in decision.candidates:
             style = estimate_style(source, candidate)
-            working, allowed, method = repair_region(working, candidate)
+            working, allowed, method = repair_region(
+                working, candidate, padding=EDIT_PADDING
+            )
             working = render_replacement(
                 working, candidate, replacement.new_text, style, allowed
             )
