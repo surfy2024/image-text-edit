@@ -95,7 +95,12 @@ class PaddleOCRBackend:
     def _default_predictor(self) -> Callable[[Path], Any]:
         from paddleocr import PaddleOCR  # lazy: optional models are expensive
 
-        engine = PaddleOCR()
+        engine = PaddleOCR(
+            use_doc_orientation_classify=False,
+            use_doc_unwarping=False,
+            use_textline_orientation=False,
+            enable_mkldnn=False,
+        )
         return lambda path: engine.predict(str(path))
 
     def detect(self, image_path: Path) -> tuple[TextCandidate, ...]:

@@ -1,5 +1,7 @@
 from pathlib import Path
+import sys
 import tempfile
+from types import SimpleNamespace
 
 from PIL import Image
 import pytest
@@ -10,6 +12,31 @@ from edit_chart_text.ocr import PaddleOCRBackend, parse_paddle_result
 def payload(text: str, score: float, box: list[list[float]]) -> dict:
     return {"rec_texts": [text], "rec_scores": [score], "dt_polys": [box]}
 
+
+def test_default_predictor_uses_chart_safe_cpu_options(monkeypatch) -> None:
+    seen = {}
+
+    class Engine:
+        def __init__(self, **kwargs):
+            seen["kwargs"] = kwargs
+
+        def predict(self, path):
+            seen["path"] = path
+            return []
+
+    monkeypatch.setitem(sys.modules, "paddleocr", SimpleNamespace(PaddleOCR=Engine))
+
+    predictor = PaddleOCRBackend()._default_predictor()
+    assert predictor(Path("chart.png")) == []
+    assert seen == {
+        "kwargs": {
+            "use_doc_orientation_classify": False,
+            "use_doc_unwarping": False,
+            "use_textline_orientation": False,
+            "enable_mkldnn": False,
+        },
+        "path": "chart.png",
+    }
 
 def test_parser_handles_paddle3_mapping() -> None:
     result = parse_paddle_result([payload("A", .9, [[1, 2], [3, 2], [3, 4], [1, 4]])])

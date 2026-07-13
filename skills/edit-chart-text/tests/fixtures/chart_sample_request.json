@@ -1,0 +1,10 @@
+{
+  "image_path": "skills/edit-chart-text/tests/fixtures/chart_sample.png",
+  "replacements": [
+    {
+      "old_text": "HZ",
+      "new_text": "CS",
+      "scope": "ask"
+    }
+  ]
+}
