@@ -1,6 +1,7 @@
 """Transactional OCR-guided chart text replacement."""
 
 from dataclasses import asdict, dataclass
+import errno
 import hashlib
 import hmac
 import json
@@ -24,6 +25,10 @@ from .validate import unchanged_outside
 EDIT_PADDING = 2
 LOCK_TIMEOUT_SECONDS = 30
 CandidateEntry = tuple[int, int, Replacement, TextCandidate]
+
+
+class ArtifactPublishError(RuntimeError):
+    """A formal artifact cannot be published with no-replace semantics."""
 
 
 def _paths(source: Path, run_id: str) -> tuple[Path, Path, Path]:
@@ -88,24 +93,45 @@ def _load_or_create_secret(state: Path | None = None) -> bytes:
     secret_path = state / "install-secret.bin"
     with FileLock(str(state / "install-secret.lock"), timeout=LOCK_TIMEOUT_SECONDS):
         if secret_path.exists():
-            secret = secret_path.read_bytes()
-            if len(secret) != 32:
-                raise ValueError("install secret must contain exactly 32 bytes")
-            return secret
+            return _read_secret(secret_path)
         secret = secrets.token_bytes(32)
-        descriptor = os.open(secret_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        descriptor, name = tempfile.mkstemp(
+            prefix=".install-secret-", suffix=".tmp", dir=state
+        )
+        temporary = Path(name)
         try:
-            with os.fdopen(descriptor, "wb", closefd=False) as stream:
-                stream.write(secret)
-                stream.flush()
-                os.fsync(stream.fileno())
+            try:
+                os.chmod(temporary, 0o600)
+            except OSError:
+                pass
+            try:
+                offset = 0
+                while offset < len(secret):
+                    written = os.write(descriptor, secret[offset:])
+                    if written <= 0:
+                        raise OSError("install secret write made no progress")
+                    offset += written
+                os.fsync(descriptor)
+            finally:
+                os.close(descriptor)
+            try:
+                _publish_no_replace(temporary, secret_path)
+            except FileExistsError:
+                return _read_secret(secret_path)
+            try:
+                os.chmod(secret_path, 0o600)
+            except OSError:
+                pass
+            return secret
         finally:
-            os.close(descriptor)
-        try:
-            os.chmod(secret_path, 0o600)
-        except OSError:
-            pass
-        return secret
+            _best_effort_unlink(temporary)
+
+
+def _read_secret(path: Path) -> bytes:
+    secret = path.read_bytes()
+    if len(secret) != 32:
+        raise ValueError("install secret must contain exactly 32 bytes")
+    return secret
 
 
 def _reserve_run(source: Path) -> tuple[str, Path]:
@@ -170,17 +196,63 @@ def _write_snapshot(source: Path, run_id: str, data: bytes) -> Path:
     return snapshot
 
 
+def _platform_name() -> str:
+    return os.name
+
+
+def _hardlink_is_unsupported(error: OSError) -> bool:
+    unsupported_errnos = {
+        code for code in (
+            errno.EXDEV,
+            getattr(errno, "ENOTSUP", None),
+            getattr(errno, "EOPNOTSUPP", None),
+        ) if code is not None
+    }
+    return (
+        error.errno in unsupported_errnos
+        or getattr(error, "winerror", None) in {1, 17, 50}
+    )
+
+
+def _best_effort_unlink(path: Path) -> None:
+    try:
+        path.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
 def _publish_no_replace(temporary: Path, destination: Path) -> None:
     try:
         os.link(temporary, destination)
     except FileExistsError as error:
         raise FileExistsError(f"formal artifact already exists: {destination}") from error
-    temporary.unlink(missing_ok=True)
+    except OSError as error:
+        if not _hardlink_is_unsupported(error):
+            raise
+        if _platform_name() != "nt":
+            raise ArtifactPublishError(
+                "hardlink publish is unsupported; copy the source to a hardlink-capable "
+                "local volume. The no-replace rename fallback is Windows-only."
+            ) from error
+        try:
+            os.rename(temporary, destination)
+        except FileExistsError as collision:
+            raise FileExistsError(
+                f"formal artifact already exists: {destination}"
+            ) from collision
+        except OSError as collision:
+            if destination.exists():
+                raise FileExistsError(
+                    f"formal artifact already exists: {destination}"
+                ) from collision
+            raise
+        return
+    _best_effort_unlink(temporary)
 
 
 def _discard(paths) -> None:
     for path in paths:
-        path.unlink(missing_ok=True)
+        _best_effort_unlink(path)
 
 def _source_digest(path: Path) -> str:
     digest = hashlib.sha256()
@@ -218,7 +290,7 @@ def _write_report(path: Path, report: EditReport) -> None:
             os.fsync(stream.fileno())
         _publish_no_replace(temporary, path)
     finally:
-        temporary.unlink(missing_ok=True)
+        _best_effort_unlink(temporary)
 
 
 def _stage_preview(source: Image.Image, entries: list[CandidateEntry], destination: Path) -> Path:
@@ -725,7 +797,6 @@ def run_pipeline(request: EditRequest, ocr_backend) -> EditReport:
                 if report.status == "success" and work.output_temporary:
                     try:
                         _publish_no_replace(work.output_temporary, output_path)
-                        temporary_paths.discard(work.output_temporary)
                         published_paths.add(output_path)
                     except FileExistsError as error:
                         report = EditReport(
@@ -737,7 +808,6 @@ def run_pipeline(request: EditRequest, ocr_backend) -> EditReport:
                 elif report.status == "needs_confirmation" and work.preview_temporary:
                     try:
                         _publish_no_replace(work.preview_temporary, preview_path)
-                        temporary_paths.discard(work.preview_temporary)
                         published_paths.add(preview_path)
                     except FileExistsError as error:
                         report = EditReport(

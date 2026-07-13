@@ -9,6 +9,12 @@
 | pixels changed outside | 停止发布结果并保留原图；缩小或重新确认目标框后重试。 |
 | OCR model unavailable | CLI 应以退出码 4 返回简洁错误；若提示模型托管平台不可用，检查本地模型缓存或网络后重试。Windows 中文用户路径相关错误见下方 ASCII 缓存设置。 |
 
+## 正式产物的文件系统要求
+
+正式图片、候选预览、JSON 报告和安装 secret 均先写入同目录临时文件，再以 no-replace 语义发布。目标卷应支持同目录 hardlink；若卷不支持（常见于部分 FAT/exFAT/SMB 配置），Windows 使用同目录 `os.rename` 的 no-replace 语义回退，预存目标仍会安全失败且不会被覆盖。
+
+非 Windows 平台不会在 hardlink 不受支持时模拟可能覆盖目标的 rename。CLI 会以退出码 4 报错，并提示把源图复制到支持 hardlink 的本地卷后重试。不要手工删除、覆盖或复用其他 `run_id` 的正式产物。
+
 ## Windows 中文路径下的 Paddle 模型缓存
 
 若 PaddleX/Paddle 在中文用户目录中报模型 JSON 无法解析、`Permission denied`，或错误路径指向 `.paddlex` / `.cache\paddle`，为当前 PowerShell 进程选择一个**可写且全 ASCII** 的缓存根目录。不要硬编码 `C:\tmp`；可使用团队约定的缓存盘，或先把允许写入的目录临时映射成 ASCII 盘符。
