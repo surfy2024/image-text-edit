@@ -26,10 +26,28 @@ def _paths(source: Path) -> tuple[Path, Path, Path]:
 
 
 def _write_report(path: Path, report: EditReport) -> None:
-    path.write_text(
-        json.dumps(asdict(report), ensure_ascii=False, indent=2),
-        encoding="utf-8",
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{path.stem}-", suffix=".tmp", dir=path.parent
     )
+    os.close(descriptor)
+    temporary = Path(temporary_name)
+    try:
+        with temporary.open("w", encoding="utf-8") as stream:
+            json.dump(asdict(report), stream, ensure_ascii=False, indent=2)
+            stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _remove_stale_output(output_path: Path, *temporary_destinations: Path) -> None:
+    output_path.unlink(missing_ok=True)
+    for destination in (output_path, *temporary_destinations):
+        pattern = f".{destination.stem}-*.tmp"
+        for temporary in destination.parent.glob(pattern):
+            temporary.unlink(missing_ok=True)
 
 
 def _write_image_atomically(image: Image.Image, destination: Path) -> None:
@@ -45,9 +63,17 @@ def _write_image_atomically(image: Image.Image, destination: Path) -> None:
         temporary.unlink(missing_ok=True)
 
 
-def _candidate_record(number: int, candidate: TextCandidate) -> dict:
+def _candidate_record(
+    number: int,
+    replacement_index: int,
+    replacement: Replacement,
+    candidate: TextCandidate,
+) -> dict:
     return {
         "candidate_number": number,
+        "replacement_index": replacement_index,
+        "old_text": replacement.old_text,
+        "new_text": replacement.new_text,
         "text": candidate.text,
         "confidence": candidate.confidence,
         "polygon": [list(point) for point in candidate.polygon],
@@ -66,7 +92,13 @@ def _write_preview(
         if len(points) >= 2:
             draw.line(points + [points[0]], fill=(255, 0, 0), width=2)
             x, y = points[0]
-            draw.text((x + 2, max(0, y - 11)), str(number), fill=(255, 0, 0), stroke_width=1, stroke_fill="white")
+            draw.text(
+                (x + 2, max(0, y - 11)),
+                str(number),
+                fill=(255, 0, 0),
+                stroke_width=1,
+                stroke_fill="white",
+            )
     _write_image_atomically(preview, destination)
 
 
@@ -75,21 +107,78 @@ def _confirmation_report(
     decisions: list[tuple[Replacement, MatchDecision]],
     preview_path: Path,
 ) -> EditReport:
-    candidates: list[TextCandidate] = []
+    entries: list[tuple[int, Replacement, TextCandidate]] = []
     messages: list[str] = []
-    for replacement, decision in decisions:
+    for replacement_index, (replacement, decision) in enumerate(decisions):
         if decision.status != "ready":
             messages.append(
                 f"{replacement.old_text!r} -> {replacement.new_text!r}: {decision.status}"
             )
-            candidates.extend(decision.candidates)
-    numbered = tuple(candidates)
-    _write_preview(image, numbered, preview_path)
+            entries.extend(
+                (replacement_index, replacement, candidate)
+                for candidate in decision.candidates
+            )
+    candidates = tuple(candidate for _, _, candidate in entries)
+    _write_preview(image, candidates, preview_path)
     messages.append(f"候选预览：{preview_path}")
     return EditReport(
         status="needs_confirmation",
         messages=messages,
-        edits=[_candidate_record(index, item) for index, item in enumerate(numbered, 1)],
+        edits=[
+            _candidate_record(number, replacement_index, replacement, candidate)
+            for number, (replacement_index, replacement, candidate) in enumerate(
+                entries, 1
+            )
+        ],
+    )
+
+
+def _ready_report(
+    source: Image.Image,
+    decisions: list[tuple[Replacement, MatchDecision]],
+    output_path: Path,
+) -> tuple[EditReport, bool]:
+    working = source.copy()
+    allowed_boxes: list[tuple[int, int, int, int]] = []
+    edits: list[dict] = []
+    for replacement, decision in decisions:
+        for candidate in decision.candidates:
+            style = estimate_style(source, candidate)
+            working, allowed, method = repair_region(working, candidate)
+            working = render_replacement(
+                working, candidate, replacement.new_text, style, allowed
+            )
+            allowed_boxes.append(allowed)
+            edits.append(
+                {
+                    "old_text": replacement.old_text,
+                    "new_text": replacement.new_text,
+                    "confidence": candidate.confidence,
+                    "polygon": [list(point) for point in candidate.polygon],
+                    "allowed_box": list(allowed),
+                    "repair_method": method,
+                }
+            )
+
+    if not unchanged_outside(source, working, allowed_boxes):
+        return (
+            EditReport(
+                status="failed",
+                messages=["安全校验失败：允许区域外的像素发生变化。"],
+                edits=edits,
+            ),
+            False,
+        )
+
+    _write_image_atomically(working, output_path)
+    return (
+        EditReport(
+            status="success",
+            output_path=str(output_path),
+            messages=["编辑完成，源图未被覆盖。"],
+            edits=edits,
+        ),
+        True,
     )
 
 
@@ -97,8 +186,11 @@ def run_pipeline(request: EditRequest, ocr_backend) -> EditReport:
     """Run requested edits without ever overwriting the source image."""
     source_path = Path(request.image_path)
     output_path, report_path, preview_path = _paths(source_path)
+    output_published = False
+    processing_error: OSError | ValueError | None = None
 
     try:
+        _remove_stale_output(output_path, report_path, preview_path)
         with Image.open(source_path) as opened:
             opened.load()
             source = opened.convert("RGB")
@@ -110,50 +202,22 @@ def run_pipeline(request: EditRequest, ocr_backend) -> EditReport:
         ]
         if any(decision.status != "ready" for _, decision in decisions):
             report = _confirmation_report(source, decisions, preview_path)
-            _write_report(report_path, report)
-            return report
-
-        working = source.copy()
-        allowed_boxes: list[tuple[int, int, int, int]] = []
-        edits: list[dict] = []
-        for replacement, decision in decisions:
-            for candidate in decision.candidates:
-                style = estimate_style(source, candidate)
-                working, allowed, method = repair_region(working, candidate)
-                working = render_replacement(
-                    working, candidate, replacement.new_text, style, allowed
-                )
-                allowed_boxes.append(allowed)
-                edits.append(
-                    {
-                        "old_text": replacement.old_text,
-                        "new_text": replacement.new_text,
-                        "confidence": candidate.confidence,
-                        "polygon": [list(point) for point in candidate.polygon],
-                        "allowed_box": list(allowed),
-                        "repair_method": method,
-                    }
-                )
-
-        if not unchanged_outside(source, working, allowed_boxes):
-            report = EditReport(
-                status="failed",
-                messages=["安全校验失败：允许区域外的像素发生变化。"],
-                edits=edits,
+        else:
+            report, output_published = _ready_report(
+                source, decisions, output_path
             )
-            _write_report(report_path, report)
-            return report
-
-        _write_image_atomically(working, output_path)
-        report = EditReport(
-            status="success",
-            output_path=str(output_path),
-            messages=["编辑完成，源图未被覆盖。"],
-            edits=edits,
-        )
-        _write_report(report_path, report)
-        return report
-    except Exception as error:
+    except (OSError, ValueError) as error:
+        output_path.unlink(missing_ok=True)
+        processing_error = error
         report = EditReport(status="failed", messages=[f"处理失败：{error}"])
+
+    try:
         _write_report(report_path, report)
-        return report
+    except OSError as report_error:
+        if output_published:
+            output_path.unlink(missing_ok=True)
+        report_path.unlink(missing_ok=True)
+        if processing_error is not None:
+            raise report_error from processing_error
+        raise
+    return report
