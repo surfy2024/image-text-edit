@@ -204,6 +204,7 @@ def _hardlink_is_unsupported(error: OSError) -> bool:
     unsupported_errnos = {
         code for code in (
             errno.EXDEV,
+            getattr(errno, "ENOSYS", None),
             getattr(errno, "ENOTSUP", None),
             getattr(errno, "EOPNOTSUPP", None),
         ) if code is not None

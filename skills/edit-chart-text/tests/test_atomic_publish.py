@@ -141,6 +141,25 @@ def test_non_windows_unsupported_hardlink_has_actionable_error(tmp_path, monkeyp
     assert not destination.exists()
 
 
+def test_non_windows_enosys_hardlink_has_actionable_error(tmp_path, monkeypatch):
+    temporary = tmp_path / ".artifact.tmp"
+    destination = tmp_path / "artifact.json"
+    temporary.write_bytes(b"new")
+    monkeypatch.setattr(
+        pipeline.os,
+        "link",
+        lambda _source, _destination: (_ for _ in ()).throw(
+            OSError(errno.ENOSYS, "hard links unavailable")
+        ),
+    )
+    monkeypatch.setattr(pipeline, "_platform_name", lambda: "posix")
+
+    with pytest.raises(pipeline.ArtifactPublishError, match="local volume"):
+        pipeline._publish_no_replace(temporary, destination)
+
+    assert not destination.exists()
+
+
 def test_secret_partial_write_failure_never_creates_short_final(tmp_path, monkeypatch):
     state = tmp_path / "state"
     real_write = pipeline.os.write
