@@ -30,7 +30,10 @@ def load_request(path: str | Path) -> EditRequest:
     replacements = tuple(
         _load_replacement(item, index) for index, item in enumerate(raw_replacements)
     )
-    return EditRequest(image_path=Path(image_path.strip()), replacements=replacements)
+    resolved_image_path = Path(image_path.strip())
+    if not resolved_image_path.is_absolute():
+        resolved_image_path = (request_path.parent / resolved_image_path).resolve()
+    return EditRequest(image_path=resolved_image_path, replacements=replacements)
 
 
 def _load_candidate_polygon(value: Any, context: str) -> tuple[tuple[int, int], ...]:

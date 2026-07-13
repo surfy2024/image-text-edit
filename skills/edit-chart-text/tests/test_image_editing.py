@@ -1,8 +1,10 @@
+from pathlib import Path
+
 import numpy as np
 import pytest
 from PIL import Image, ImageDraw
 
-pytest.importorskip("cv2", reason="opencv-python-headless is a declared dependency")
+cv2 = pytest.importorskip("cv2", reason="opencv-python-headless is a declared dependency")
 
 from edit_chart_text.models import TextCandidate, TextStyle
 from edit_chart_text.repair import repair_region, repair_text_region
@@ -125,3 +127,33 @@ def test_long_glyph_stroke_removed_without_crossing_border_evidence():
     repaired, _, method = repair_region(im, candidate(), padding=2)
     assert method == "uniform"
     assert np.asarray(repaired)[15, 12:29, 0].mean() > 240
+
+
+def test_real_long_label_repair_removes_antialiased_glyph_ghosts():
+    source = Path(__file__).parent / "fixtures" / "chart_sample.png"
+    image = Image.open(source).convert("RGB")
+    item = TextCandidate(
+        "HYSY FPSO",
+        ((210, 246), (296, 246), (296, 266), (210, 266)),
+        0.997,
+    )
+
+    repaired, _, method = repair_region(image, item, padding=2)
+
+    assert method == "inpaint"
+    core = np.asarray(repaired)[246:266, 210:296]
+    gray = cv2.cvtColor(core, cv2.COLOR_RGB2GRAY).astype(float)
+    high_frequency = np.abs(gray - cv2.GaussianBlur(gray, (0, 0), 2))
+    assert np.percentile(high_frequency, 99) < 5.0
+
+    original_patch = np.asarray(image)[244:268, 208:298]
+    repaired_patch = np.asarray(repaired)[244:268, 208:298]
+    vertical_weight = np.linspace(0, 1, original_patch.shape[0])[:, None, None]
+    border_interpolation = (
+        original_patch[0][None, :, :] * (1 - vertical_weight)
+        + original_patch[-1][None, :, :] * vertical_weight
+    )
+    block_deviation = np.linalg.norm(
+        repaired_patch.astype(float) - border_interpolation, axis=2
+    )[:, 2:88]
+    assert np.percentile(block_deviation, 90) < 7.0

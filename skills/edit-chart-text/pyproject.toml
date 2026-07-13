@@ -19,5 +19,11 @@ test = ["pytest>=8.0"]
 [project.scripts]
 edit-chart-text = "edit_chart_text.cli:main"
 
+[tool.pytest.ini_options]
+addopts = "-m 'not integration'"
+markers = [
+    "integration: opt-in tests that run real OCR models and may download model files",
+]
+
 [tool.setuptools.packages.find]
 where = ["src"]

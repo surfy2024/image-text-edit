@@ -1,5 +1,5 @@
 {
-  "image_path": "skills/edit-chart-text/tests/fixtures/chart_sample.png",
+  "image_path": "chart_sample.png",
   "replacements": [
     {
       "old_text": "HZ",

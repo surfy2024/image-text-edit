@@ -73,7 +73,10 @@ def repair_text_region(image: Image.Image, candidate: TextCandidate, padding: in
         fill = np.clip(horiz + vert - center, 0, 255).astype(np.uint8)
     else:
         method = "inpaint"
-        fill = cv2.inpaint(patch, mask, 3, cv2.INPAINT_TELEA)
+        if not has_chart_line:
+            mask[t - at:b - at, l - al:r - al] = 255
+        radius = 3 if has_chart_line else min(10, max(3, min(patch.shape[:2]) // 2))
+        fill = cv2.inpaint(patch, mask, radius, cv2.INPAINT_TELEA)
     result_patch = patch.copy()
     result_patch[mask > 0] = fill[mask > 0]
     if method == "inpaint" and has_chart_line:

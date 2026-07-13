@@ -25,7 +25,7 @@ def test_load_request_with_dynamic_replacements(tmp_path) -> None:
 
     request = load_request(request_path)
 
-    assert request.image_path.name == "chart.png"
+    assert request.image_path == tmp_path / "chart.png"
     assert len(request.replacements) == 2
     assert request.replacements[0].old_text == "P10"
     assert request.replacements[0].new_text == "P40"
