@@ -12,7 +12,7 @@ from .matching import MatchDecision, choose_candidates
 from .models import EditReport, EditRequest, Replacement, TextCandidate
 from .repair import repair_region
 from .render import render_replacement
-from .style import estimate_style
+from .style import candidate_bounds, estimate_style
 from .validate import unchanged_outside
 
 
@@ -42,12 +42,9 @@ def _write_report(path: Path, report: EditReport) -> None:
         temporary.unlink(missing_ok=True)
 
 
-def _remove_stale_output(output_path: Path, *temporary_destinations: Path) -> None:
+def _remove_stale_artifacts(output_path: Path, preview_path: Path) -> None:
     output_path.unlink(missing_ok=True)
-    for destination in (output_path, *temporary_destinations):
-        pattern = f".{destination.stem}-*.tmp"
-        for temporary in destination.parent.glob(pattern):
-            temporary.unlink(missing_ok=True)
+    preview_path.unlink(missing_ok=True)
 
 
 def _write_image_atomically(image: Image.Image, destination: Path) -> None:
@@ -87,19 +84,43 @@ def _write_preview(
 ) -> None:
     preview = source.convert("RGB").copy()
     draw = ImageDraw.Draw(preview)
-    for number, candidate in enumerate(candidates, start=1):
-        points = list(candidate.polygon)
+    labels: dict[tuple[tuple[int, int], ...], list[int]] = {}
+    for number, candidate in enumerate(candidates, 1):
+        labels.setdefault(candidate.polygon, []).append(number)
+    for polygon, numbers in labels.items():
+        points = list(polygon)
         if len(points) >= 2:
             draw.line(points + [points[0]], fill=(255, 0, 0), width=2)
             x, y = points[0]
             draw.text(
                 (x + 2, max(0, y - 11)),
-                str(number),
+                ",".join(str(number) for number in numbers),
                 fill=(255, 0, 0),
                 stroke_width=1,
                 stroke_fill="white",
             )
     _write_image_atomically(preview, destination)
+
+
+def _candidate_preview_report(
+    image: Image.Image,
+    entries: list[tuple[int, Replacement, TextCandidate]],
+    preview_path: Path,
+    messages: list[str],
+) -> EditReport:
+    candidates = tuple(candidate for _, _, candidate in entries)
+    _write_preview(image, candidates, preview_path)
+    messages.append(f"候选预览：{preview_path}")
+    return EditReport(
+        status="needs_confirmation",
+        messages=messages,
+        edits=[
+            _candidate_record(number, replacement_index, replacement, candidate)
+            for number, (replacement_index, replacement, candidate) in enumerate(
+                entries, 1
+            )
+        ],
+    )
 
 
 def _confirmation_report(
@@ -118,18 +139,55 @@ def _confirmation_report(
                 (replacement_index, replacement, candidate)
                 for candidate in decision.candidates
             )
-    candidates = tuple(candidate for _, _, candidate in entries)
-    _write_preview(image, candidates, preview_path)
-    messages.append(f"候选预览：{preview_path}")
-    return EditReport(
-        status="needs_confirmation",
-        messages=messages,
-        edits=[
-            _candidate_record(number, replacement_index, replacement, candidate)
-            for number, (replacement_index, replacement, candidate) in enumerate(
-                entries, 1
+    return _candidate_preview_report(image, entries, preview_path, messages)
+
+
+def _overlap(
+    left: TextCandidate,
+    right: TextCandidate,
+    image_size: tuple[int, int],
+) -> bool:
+    left_l, left_t, left_r, left_b = candidate_bounds(left, image_size)
+    right_l, right_t, right_r, right_b = candidate_bounds(right, image_size)
+    return (
+        min(left_r, right_r) > max(left_l, right_l)
+        and min(left_b, right_b) > max(left_t, right_t)
+    )
+
+
+def _conflict_report(
+    image: Image.Image,
+    decisions: list[tuple[Replacement, MatchDecision]],
+    preview_path: Path,
+) -> EditReport | None:
+    entries = [
+        (replacement_index, replacement, candidate)
+        for replacement_index, (replacement, decision) in enumerate(decisions)
+        for candidate in decision.candidates
+    ]
+    conflicting: set[int] = set()
+    messages: list[str] = []
+    for left_position, left in enumerate(entries):
+        for right_position in range(left_position + 1, len(entries)):
+            right = entries[right_position]
+            if left[0] == right[0] or not _overlap(
+                left[2], right[2], image.size
+            ):
+                continue
+            conflicting.update((left_position, right_position))
+            messages.append(
+                "候选区域冲突："
+                f"replacement[{left[0]}] {left[1].old_text!r}->{left[1].new_text!r} "
+                f"与 replacement[{right[0]}] "
+                f"{right[1].old_text!r}->{right[1].new_text!r} 重叠。"
             )
-        ],
+    if not conflicting:
+        return None
+    conflict_entries = [
+        entry for index, entry in enumerate(entries) if index in conflicting
+    ]
+    return _candidate_preview_report(
+        image, conflict_entries, preview_path, messages
     )
 
 
@@ -190,7 +248,7 @@ def run_pipeline(request: EditRequest, ocr_backend) -> EditReport:
     processing_error: OSError | ValueError | None = None
 
     try:
-        _remove_stale_output(output_path, report_path, preview_path)
+        _remove_stale_artifacts(output_path, preview_path)
         with Image.open(source_path) as opened:
             opened.load()
             source = opened.convert("RGB")
@@ -203,9 +261,11 @@ def run_pipeline(request: EditRequest, ocr_backend) -> EditReport:
         if any(decision.status != "ready" for _, decision in decisions):
             report = _confirmation_report(source, decisions, preview_path)
         else:
-            report, output_published = _ready_report(
-                source, decisions, output_path
-            )
+            report = _conflict_report(source, decisions, preview_path)
+            if report is None:
+                report, output_published = _ready_report(
+                    source, decisions, output_path
+                )
     except (OSError, ValueError) as error:
         output_path.unlink(missing_ok=True)
         processing_error = error

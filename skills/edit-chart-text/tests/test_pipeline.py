@@ -41,6 +41,16 @@ class FailingOCR:
         raise ValueError("injected OCR failure")
 
 
+class OverlappingOCR:
+    def detect(self, image_path):
+        return (
+            candidate(),
+            TextCandidate(
+                "P10", ((25, 12), (45, 12), (45, 26), (25, 26)), 0.99
+            ),
+        )
+
+
 def chart(tmp_path):
     path = tmp_path / "chart.png"
     image = Image.new("RGB", (80, 40), "white")
@@ -164,3 +174,70 @@ def test_multi_replacement_confirmation_records_map_preview_numbers(tmp_path):
         ("P10", "P20"),
         ("P10", "P20"),
     ]
+
+
+def test_same_candidate_selected_by_two_replacements_needs_confirmation(tmp_path):
+    source = chart(tmp_path)
+    original = source.read_bytes()
+    request = EditRequest(
+        source,
+        (
+            Replacement("HZ", "CS", "one"),
+            Replacement("HZ", "AB", "one"),
+        ),
+    )
+
+    report = run_pipeline(request, FakeOCR())
+
+    assert report.status == "needs_confirmation"
+    assert source.read_bytes() == original
+    assert not (tmp_path / "chart_edited.png").exists()
+    assert (tmp_path / "chart_candidates.png").exists()
+    assert [item["replacement_index"] for item in report.edits] == [0, 1]
+    assert any("冲突" in message for message in report.messages)
+
+
+def test_overlapping_candidates_across_replacements_need_confirmation(tmp_path):
+    source = chart(tmp_path)
+    original = source.read_bytes()
+    request = EditRequest(
+        source,
+        (
+            Replacement("HZ", "CS", "one"),
+            Replacement("P10", "P20", "one"),
+        ),
+    )
+
+    report = run_pipeline(request, OverlappingOCR())
+
+    assert report.status == "needs_confirmation"
+    assert source.read_bytes() == original
+    assert not (tmp_path / "chart_edited.png").exists()
+    assert (tmp_path / "chart_candidates.png").exists()
+    assert [item["candidate_number"] for item in report.edits] == [1, 2]
+    assert [item["replacement_index"] for item in report.edits] == [0, 1]
+
+
+def test_success_removes_preview_from_previous_confirmation(tmp_path):
+    source = chart(tmp_path)
+    ambiguous = EditRequest(source, (Replacement("HZ", "CS", "ask"),))
+    successful = EditRequest(source, (Replacement("HZ", "CS", "one"),))
+
+    assert run_pipeline(ambiguous, AmbiguousOCR()).status == "needs_confirmation"
+    assert (tmp_path / "chart_candidates.png").exists()
+
+    assert run_pipeline(successful, FakeOCR()).status == "success"
+    assert not (tmp_path / "chart_candidates.png").exists()
+
+
+def test_run_does_not_delete_another_runs_unique_temp_file(tmp_path):
+    source = chart(tmp_path)
+    concurrent_temp = tmp_path / ".chart_edited-other-run.tmp"
+    concurrent_temp.write_bytes(b"in progress")
+
+    report = run_pipeline(
+        EditRequest(source, (Replacement("HZ", "CS", "one"),)), FakeOCR()
+    )
+
+    assert report.status == "success"
+    assert concurrent_temp.read_bytes() == b"in progress"
