@@ -1,4 +1,4 @@
 interface:
   display_name: "Edit Chart Text"
-  short_description: "Replace text in scientific chart images without altering surrounding graphics"
-  default_prompt: "Use $edit-chart-text to replace specified text in this chart image while preserving the original image and surrounding pixels."
+  short_description: "Replace text in charts, maps, and engineering drawings"
+  default_prompt: "Use $edit-chart-text to replace specified text in this chart, map, or engineering drawing while preserving surrounding pixels."
