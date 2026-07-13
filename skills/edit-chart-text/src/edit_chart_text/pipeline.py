@@ -88,9 +88,9 @@ def _write_preview(
 ) -> None:
     preview = source.convert("RGB").copy()
     draw = ImageDraw.Draw(preview)
-    labels: dict[tuple[tuple[int, int], ...], list[int]] = {}
+    labels: dict[tuple[tuple[int, int], ...], set[int]] = {}
     for number, candidate in candidates:
-        labels.setdefault(candidate.polygon, []).append(number)
+        labels.setdefault(candidate.polygon, set()).add(number)
     for polygon, numbers in labels.items():
         points = list(polygon)
         if len(points) >= 2:
@@ -98,7 +98,7 @@ def _write_preview(
             x, y = points[0]
             draw.text(
                 (x + 2, max(0, y - 11)),
-                ",".join(str(number) for number in numbers),
+                ",".join(str(number) for number in sorted(numbers)),
                 fill=(255, 0, 0),
                 stroke_width=1,
                 stroke_fill="white",
@@ -125,28 +125,33 @@ def _candidate_preview_report(
     )
 
 
-def _numbered_confirmation_entries(
+def _global_candidate_numbers(
+    candidates: tuple[TextCandidate, ...],
+) -> dict[int, int]:
+    numbers: dict[int, int] = {}
+    for number, candidate in enumerate(candidates, 1):
+        numbers.setdefault(id(candidate), number)
+    return numbers
+
+
+def _numbered_entries(
     decisions: list[tuple[Replacement, MatchDecision]],
+    global_numbers: dict[int, int],
+    *,
+    include_ready: bool,
 ) -> list[CandidateEntry]:
-    entries: list[CandidateEntry] = []
-    for replacement_index, (replacement, decision) in enumerate(decisions):
-        if decision.status == "ready":
-            continue
-        for candidate in decision.candidates:
-            entries.append(
-                (len(entries) + 1, replacement_index, replacement, candidate)
-            )
-    return entries
+    return [
+        (global_numbers[id(candidate)], replacement_index, replacement, candidate)
+        for replacement_index, (replacement, decision) in enumerate(decisions)
+        if include_ready or decision.status != "ready"
+        for candidate in decision.candidates
+    ]
 
 
 def _apply_candidate_numbers(
     decisions: list[tuple[Replacement, MatchDecision]],
-    numbered_entries: list[CandidateEntry],
+    detected: tuple[TextCandidate, ...],
 ) -> tuple[list[tuple[Replacement, MatchDecision]], list[str]]:
-    by_number = {
-        number: (replacement_index, candidate)
-        for number, replacement_index, _, candidate in numbered_entries
-    }
     resolved: list[tuple[Replacement, MatchDecision]] = []
     messages: list[str] = []
     for replacement_index, (replacement, decision) in enumerate(decisions):
@@ -154,15 +159,17 @@ def _apply_candidate_numbers(
         if number is None:
             resolved.append((replacement, decision))
             continue
-        selected = by_number.get(number)
-        if selected is None:
+        if number > len(detected):
             messages.append(
                 f"replacement[{replacement_index}] 的候选编号 {number} 不存在。"
             )
             resolved.append(
                 (replacement, MatchDecision("needs_confirmation", decision.candidates))
             )
-        elif selected[0] != replacement_index:
+            continue
+
+        selected = detected[number - 1]
+        if not any(selected is candidate for candidate in decision.candidates):
             messages.append(
                 f"候选编号 {number} 不属于 replacement[{replacement_index}]。"
             )
@@ -170,43 +177,25 @@ def _apply_candidate_numbers(
                 (replacement, MatchDecision("needs_confirmation", decision.candidates))
             )
         else:
-            resolved.append(
-                (replacement, MatchDecision("ready", (selected[1],)))
-            )
+            resolved.append((replacement, MatchDecision("ready", (selected,))))
     return resolved, messages
-
 
 def _confirmation_report(
     image: Image.Image,
     decisions: list[tuple[Replacement, MatchDecision]],
-    numbered_entries: list[CandidateEntry],
+    global_numbers: dict[int, int],
     preview_path: Path,
     selection_messages: list[str] | None = None,
 ) -> EditReport:
-    unresolved = {
-        index
-        for index, (_, decision) in enumerate(decisions)
-        if decision.status != "ready"
-    }
-    entries = [
-        entry for entry in numbered_entries if entry[1] in unresolved
-    ]
-    next_number = max((entry[0] for entry in numbered_entries), default=0) + 1
-    represented = {entry[1] for entry in entries}
-    for replacement_index in sorted(unresolved - represented):
-        replacement, decision = decisions[replacement_index]
-        for candidate in decision.candidates:
-            entries.append(
-                (next_number, replacement_index, replacement, candidate)
-            )
-            next_number += 1
-
+    entries = _numbered_entries(
+        decisions, global_numbers, include_ready=False
+    )
     messages = list(selection_messages or [])
-    for replacement_index in sorted(unresolved):
-        replacement, decision = decisions[replacement_index]
-        messages.append(
-            f"{replacement.old_text!r} -> {replacement.new_text!r}: {decision.status}"
-        )
+    for replacement_index, (replacement, decision) in enumerate(decisions):
+        if decision.status != "ready":
+            messages.append(
+                f"{replacement.old_text!r} -> {replacement.new_text!r}: {decision.status}"
+            )
     return _candidate_preview_report(image, entries, preview_path, messages)
 
 def _planned_edit_bounds(
@@ -239,28 +228,12 @@ def _overlap(
 def _conflict_report(
     image: Image.Image,
     decisions: list[tuple[Replacement, MatchDecision]],
-    numbered_entries: list[CandidateEntry],
+    global_numbers: dict[int, int],
     preview_path: Path,
 ) -> EditReport | None:
-    known_numbers = {
-        (replacement_index, id(candidate)): number
-        for number, replacement_index, _, candidate in numbered_entries
-    }
-    used_numbers: set[int] = set()
-    entries: list[CandidateEntry] = []
-    next_number = 1
-    for replacement_index, (replacement, decision) in enumerate(decisions):
-        for candidate in decision.candidates:
-            number = known_numbers.get((replacement_index, id(candidate)))
-            if number is None or number in used_numbers:
-                while next_number in used_numbers:
-                    next_number += 1
-                number = next_number
-            used_numbers.add(number)
-            entries.append(
-                (number, replacement_index, replacement, candidate)
-            )
-
+    entries = _numbered_entries(
+        decisions, global_numbers, include_ready=True
+    )
     conflicting: set[int] = set()
     messages: list[str] = []
     for left_position, left in enumerate(entries):
@@ -353,21 +326,21 @@ def run_pipeline(request: EditRequest, ocr_backend) -> EditReport:
             (replacement, choose_candidates(replacement, detected))
             for replacement in request.replacements
         ]
-        numbered_entries = _numbered_confirmation_entries(decisions)
+        global_numbers = _global_candidate_numbers(detected)
         decisions, selection_messages = _apply_candidate_numbers(
-            decisions, numbered_entries
+            decisions, detected
         )
         if any(decision.status != "ready" for _, decision in decisions):
             report = _confirmation_report(
                 source,
                 decisions,
-                numbered_entries,
+                global_numbers,
                 preview_path,
                 selection_messages,
             )
         else:
             report = _conflict_report(
-                source, decisions, numbered_entries, preview_path
+                source, decisions, global_numbers, preview_path
             )
             if report is None:
                 report, output_published = _ready_report(

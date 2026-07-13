@@ -16,7 +16,7 @@ class Replacement:
     new_text: str
     scope: Scope = "ask"
     location_hint: str | None = None
-    candidate_number: int | None = None
+    candidate_number: int | None = None  # 1-based global OCR sequence index
 
 
 @dataclass(frozen=True)

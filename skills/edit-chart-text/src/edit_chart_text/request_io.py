@@ -66,7 +66,10 @@ def _load_replacement(item: Any, index: int) -> Replacement:
     if "candidate_number" in item and (
         type(candidate_number) is not int or candidate_number <= 0
     ):
-        raise ValueError(f"{context}.candidate_number must be a positive integer")
+        raise ValueError(
+            f"{context}.candidate_number must be a positive "
+            "1-based global OCR candidate number"
+        )
 
     return Replacement(
         old_text=old_text.strip(),

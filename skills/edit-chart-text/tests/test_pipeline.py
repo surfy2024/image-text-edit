@@ -26,6 +26,12 @@ class AmbiguousOCR:
         return (candidate(), candidate(40))
 
 
+class FuzzyOCR:
+    def detect(self, image_path):
+        item = candidate()
+        return (TextCandidate("HZZ", item.polygon, item.confidence),)
+
+
 class MultiAmbiguousOCR:
     def detect(self, image_path):
         return (
@@ -353,3 +359,76 @@ def test_candidate_number_owned_by_other_replacement_does_not_edit(tmp_path):
     assert report.status == "needs_confirmation"
     assert not (tmp_path / "chart_edited.png").exists()
     assert any("3" in message and "不属于" in message for message in report.messages)
+
+
+def test_conflict_candidate_number_survives_replacement_list_reduction(tmp_path):
+    source = chart(tmp_path)
+    initial = EditRequest(
+        source,
+        (
+            Replacement("HZ", "CS", "one"),
+            Replacement("P10", "P20", "one"),
+        ),
+    )
+
+    first_report = run_pipeline(initial, OverlappingOCR())
+    selected = next(
+        item for item in first_report.edits if item["replacement_index"] == 1
+    )
+
+    assert first_report.status == "needs_confirmation"
+    assert selected["candidate_number"] == 2
+
+    confirmed = EditRequest(
+        source,
+        (
+            Replacement(
+                "P10",
+                "P20",
+                "one",
+                candidate_number=selected["candidate_number"],
+            ),
+        ),
+    )
+    second_report = run_pipeline(confirmed, OverlappingOCR())
+
+    assert second_report.status == "success"
+    assert len(second_report.edits) == 1
+    assert second_report.edits[0]["polygon"] == selected["polygon"]
+
+
+def test_same_ocr_candidate_has_same_global_number_across_replacements(tmp_path):
+    source = chart(tmp_path)
+    request = EditRequest(
+        source,
+        (
+            Replacement("HZ", "CS", "one"),
+            Replacement("HZ", "AB", "one"),
+        ),
+    )
+
+    report = run_pipeline(request, FakeOCR())
+
+    assert report.status == "needs_confirmation"
+    assert [item["candidate_number"] for item in report.edits] == [1, 1]
+    assert [item["replacement_index"] for item in report.edits] == [0, 1]
+
+
+def test_fuzzy_candidate_only_becomes_ready_after_explicit_global_number(tmp_path):
+    source = chart(tmp_path)
+    initial = EditRequest(source, (Replacement("HZ", "CS", "one"),))
+
+    first_report = run_pipeline(initial, FuzzyOCR())
+
+    assert first_report.status == "needs_confirmation"
+    assert first_report.edits[0]["candidate_number"] == 1
+
+    confirmed = EditRequest(
+        source,
+        (Replacement("HZ", "CS", "one", candidate_number=1),),
+    )
+    second_report = run_pipeline(confirmed, FuzzyOCR())
+
+    assert second_report.status == "success"
+    assert len(second_report.edits) == 1
+    assert second_report.edits[0]["polygon"] == first_report.edits[0]["polygon"]
