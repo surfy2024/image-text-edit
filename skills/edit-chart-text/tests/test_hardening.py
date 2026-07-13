@@ -155,14 +155,13 @@ def test_same_source_runs_are_serialized_and_do_not_cross_paths(tmp_path):
 
 
 
-
 def test_confirmation_rejects_report_with_mismatched_run_binding(tmp_path):
     source=chart(tmp_path)
     first=run_pipeline(EditRequest(source,(Replacement("HZ","CS","ask"),)),SequenceOCR((item(),item(x=40))))
     payload=json.loads(Path(first.report_path).read_text(encoding="utf-8"))
     payload["run_id"]="different-run"
     Path(first.report_path).write_text(json.dumps(payload),encoding="utf-8")
-    request=confirm_request = EditRequest(source,(Replacement("HZ","CS","one",candidate_number=first.edits[0]["candidate_number"],candidate_polygon=tuple(map(tuple,first.edits[0]["polygon"])),candidate_token=first.edits[0]["candidate_token"]),),Path(first.report_path))
+    request=EditRequest(source,(Replacement("HZ","CS","one",candidate_number=first.edits[0]["candidate_number"],candidate_polygon=tuple(map(tuple,first.edits[0]["polygon"])),candidate_token=first.edits[0]["candidate_token"]),),Path(first.report_path))
     result=run_pipeline(request,SequenceOCR((item(),)))
     assert result.status=="needs_confirmation"
     assert "binding" in " ".join(result.messages).lower() or "run" in " ".join(result.messages).lower()
@@ -172,7 +171,8 @@ def test_failed_geometry_report_keeps_source_digest(tmp_path):
     source=chart(tmp_path)
     bad=TextCandidate("HZ",((-1,10),(20,10),(20,24),(-1,24)),.99)
     result=run_pipeline(EditRequest(source,(Replacement("HZ","CS","one"),)),SequenceOCR((bad,)))
-    assert result.status=="failed"
+    assert result.status=="needs_confirmation"
+    assert result.edits == []
     assert result.source_sha256==hashlib.sha256(source.read_bytes()).hexdigest()
 
 
@@ -214,3 +214,65 @@ def test_lock_timeout_returns_clear_failed_report(tmp_path, monkeypatch):
     assert result.status=="failed"
     assert "timed out" in " ".join(result.messages)
     assert Path(result.report_path).exists()
+
+
+def test_confirmation_report_rejects_copied_or_renamed_report(tmp_path):
+    source=chart(tmp_path)
+    first=run_pipeline(EditRequest(source,(Replacement("HZ","CS","ask"),)),SequenceOCR((item(),item(x=40))))
+    copied=tmp_path/"copied-report.json"
+    copied.write_bytes(Path(first.report_path).read_bytes())
+    chosen=first.edits[0]
+    request=EditRequest(source,(Replacement("HZ","CS","one",candidate_number=chosen["candidate_number"],candidate_polygon=tuple(map(tuple,chosen["polygon"])),candidate_token=chosen["candidate_token"]),),copied)
+    result=run_pipeline(request,SequenceOCR((item(),item(x=40)),(item("CS"),)))
+    assert result.status=="needs_confirmation"
+    assert "report path" in " ".join(result.messages).lower()
+
+
+def test_predictable_run_id_collision_never_overwrites_existing_artifact(tmp_path, monkeypatch):
+    source=chart(tmp_path)
+    collided="a"*32; fresh="b"*32
+    existing=tmp_path/f"chart_{collided}_edited.png"
+    existing.write_bytes(b"user-owned")
+    ids=iter((collided,fresh))
+    monkeypatch.setattr(pipeline.secrets,"token_hex",lambda _n: next(ids))
+    result=run_pipeline(EditRequest(source,(Replacement("HZ","CS","one"),)),SequenceOCR((item(),),(item("CS"),)))
+    assert result.status=="success"
+    assert result.run_id==fresh
+    assert existing.read_bytes()==b"user-owned"
+    assert Path(result.output_path).exists()
+
+
+def test_mid_reservation_collision_cleans_only_attempt_placeholders(tmp_path, monkeypatch):
+    source=chart(tmp_path)
+    collided="c"*32; fresh="d"*32
+    existing_report=tmp_path/f"chart_{collided}_edit-report.json"
+    existing_report.write_bytes(b"user-report")
+    ids=iter((collided,fresh))
+    monkeypatch.setattr(pipeline.secrets,"token_hex",lambda _n: next(ids))
+    result=run_pipeline(EditRequest(source,(Replacement("HZ","CS","one"),)),SequenceOCR((item(),),(item("CS"),)))
+    assert result.status=="success"
+    assert result.run_id==fresh
+    assert existing_report.read_bytes()==b"user-report"
+    assert not (tmp_path/f"chart_{collided}_edited.png").exists()
+
+
+def test_invalid_detected_candidates_never_receive_tokens_or_enter_report(tmp_path):
+    source=chart(tmp_path)
+    valid=(item(x=10),item(x=40))
+    outside=TextCandidate("HZ",((-1,10),(20,10),(20,24),(-1,24)),.99)
+    degenerate=TextCandidate("HZ",((5,5),(10,5),(15,5),(20,5)),.99)
+    result=run_pipeline(EditRequest(source,(Replacement("HZ","CS","ask"),)),SequenceOCR(valid+(outside,degenerate)))
+    assert result.status=="needs_confirmation"
+    assert len(result.edits)==2
+    assert {tuple(map(tuple,edit["polygon"])) for edit in result.edits}=={candidate.polygon for candidate in valid}
+    assert "invalid" in " ".join(result.messages).lower()
+
+
+def test_only_invalid_detected_candidate_becomes_safe_not_found_confirmation(tmp_path):
+    source=chart(tmp_path)
+    invalid=TextCandidate("HZ",((10,10),(20,10),(30,10),(40,10)),.99)
+    result=run_pipeline(EditRequest(source,(Replacement("HZ","CS","one"),)),SequenceOCR((invalid,)))
+    assert result.status=="needs_confirmation"
+    assert result.output_path is None
+    assert result.edits==[]
+    assert "invalid" in " ".join(result.messages).lower()

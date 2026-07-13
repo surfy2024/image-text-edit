@@ -110,8 +110,9 @@ def test_report_failure_chains_original_ocr_error(tmp_path,monkeypatch):
     assert isinstance(raised.value.__cause__,ValueError)
 
 
-def test_out_of_bounds_candidate_fails_without_edit(tmp_path):
+def test_out_of_bounds_candidate_requires_confirmation_without_edit(tmp_path):
     source=chart(tmp_path)
     bad=TextCandidate("HZ",((-1,10),(20,10),(20,24),(-1,24)),.99)
     report=run_pipeline(EditRequest(source,(Replacement("HZ","CS","one"),)),SequenceOCR((bad,)))
-    assert report.status=="failed" and report.output_path is None
+    assert report.status=="needs_confirmation" and report.output_path is None
+    assert report.edits == []

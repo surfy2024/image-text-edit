@@ -26,9 +26,37 @@ CandidateEntry = tuple[int, int, Replacement, TextCandidate]
 
 def _paths(source: Path, run_id: str) -> tuple[Path, Path, Path]:
     prefix = f"{source.stem}_{run_id}"
-    return (source.parent / f"{prefix}_edited.png",
-            source.parent / f"{prefix}_edit-report.json",
-            source.parent / f"{prefix}_candidates.png")
+    return (
+        source.parent / f"{prefix}_edited.png",
+        source.parent / f"{prefix}_edit-report.json",
+        source.parent / f"{prefix}_candidates.png",
+    )
+
+
+def _reserve_artifacts(source: Path) -> tuple[str, tuple[Path, Path, Path], set[Path]]:
+    """Atomically reserve every formal path, retrying without touching collisions."""
+    while True:
+        run_id = secrets.token_hex(16)
+        paths = _paths(source, run_id)
+        created: set[Path] = set()
+        try:
+            for path in paths:
+                descriptor = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+                created.add(path)
+                os.close(descriptor)
+            return run_id, paths, created
+        except FileExistsError:
+            for path in created:
+                path.unlink(missing_ok=True)
+        except BaseException:
+            for path in created:
+                path.unlink(missing_ok=True)
+            raise
+
+
+def _discard(paths: set[Path]) -> None:
+    for path in paths:
+        path.unlink(missing_ok=True)
 
 
 def _source_digest(path: Path) -> str:
@@ -90,6 +118,19 @@ def _publish_preview(source: Image.Image, entries: list[CandidateEntry], destina
         temporary.unlink(missing_ok=True)
 
 
+def _validated_candidates(candidates, image_size):
+    valid: list[TextCandidate] = []
+    messages: list[str] = []
+    for index, candidate in enumerate(candidates):
+        try:
+            candidate_bounds(candidate, image_size)
+        except (TypeError, ValueError) as error:
+            messages.append(f"ignored invalid OCR candidate[{index}]: {error}")
+        else:
+            valid.append(candidate)
+    return tuple(valid), messages
+
+
 def _global_candidate_numbers(candidates: tuple[TextCandidate, ...]) -> dict[int, int]:
     result: dict[int, int] = {}
     for number, candidate in enumerate(candidates, 1):
@@ -135,6 +176,10 @@ def _selection_error(request: EditRequest, digest: str) -> str | None:
         return f"confirmation report invalid: {error}"
     if not isinstance(payload, dict) or payload.get("status") != "needs_confirmation" or not payload.get("run_id"):
         return "confirmation report status/run_id is invalid or expired"
+    declared_report_path = payload.get("report_path")
+    if (not isinstance(declared_report_path, str) or not declared_report_path
+            or Path(declared_report_path).resolve() != request.confirmation_report_path.resolve()):
+        return "confirmation report path does not match its self-described report path"
     try:
         report_source = Path(payload.get("source_path", "")).resolve()
     except (OSError, ValueError):
@@ -310,51 +355,70 @@ def _run_locked(request,backend,run_id,output_path,report_path,preview_path):
     selection_error=_selection_error(request,digest)
     if selection_error:
         return EditReport("needs_confirmation",run_id,digest,report_path=str(report_path),source_path=str(source_path),messages=[selection_error]),False,False
-    detected=tuple(backend.detect(source_path))
+    raw_detected=tuple(backend.detect(source_path))
+    detected,candidate_messages=_validated_candidates(raw_detected,source.size)
     decisions=[(replacement,choose_candidates(replacement,detected)) for replacement in request.replacements]
     numbers=_global_candidate_numbers(detected)
     decisions,selection_messages=_resolve_selected(decisions)
     if any(decision.status != "ready" for _,decision in decisions):
-        messages=selection_messages+[f"{r.old_text!r}->{r.new_text!r}: {d.status}" for r,d in decisions if d.status!="ready"]
+        messages=candidate_messages+selection_messages+[f"{r.old_text!r}->{r.new_text!r}: {d.status}" for r,d in decisions if d.status!="ready"]
         report=_confirmation(source,decisions,numbers,preview_path,messages,run_id,digest,report_path,source_path)
         return report,False,True
     conflicts=_conflicts(decisions,source.size)
     if conflicts:
-        report=_confirmation(source,decisions,numbers,preview_path,conflicts,run_id,digest,report_path,source_path,include_ready=True)
+        report=_confirmation(source,decisions,numbers,preview_path,candidate_messages+conflicts,run_id,digest,report_path,source_path,include_ready=True)
         return report,False,True
     report,staged=_ready(source,decisions,output_path,report_path,run_id,digest,source_path,backend)
+    if candidate_messages:
+        report.messages[:0] = candidate_messages
     if staged is not None: staged.unlink(missing_ok=True)
     return report,report.status=="success",False
 
 
 def run_pipeline(request: EditRequest, ocr_backend) -> EditReport:
     """Run one isolated transaction; the report is its final commit marker."""
-    run_id=secrets.token_hex(16)
-    source_path=Path(request.image_path)
-    output_path,report_path,preview_path=_paths(source_path,run_id)
-    output_owned=preview_owned=False
-    processing_error=None
-    lock=FileLock(str(source_path.with_name(f".{source_path.name}.edit-chart-text.lock")),timeout=LOCK_TIMEOUT_SECONDS)
+    source_path = Path(request.image_path).resolve()
+    run_id, paths, owned = _reserve_artifacts(source_path)
+    output_path, report_path, preview_path = paths
+    keep: set[Path] = set()
+    processing_error = None
+    lock = FileLock(str(source_path.with_name(f".{source_path.name}.edit-chart-text.lock")), timeout=LOCK_TIMEOUT_SECONDS)
     try:
-        with lock:
-            try:
-                report,output_owned,preview_owned=_run_locked(request,ocr_backend,run_id,output_path,report_path,preview_path)
-            except (OSError,ValueError) as error:
-                processing_error=error
+        try:
+            with lock:
                 try:
-                    failure_digest = _source_digest(source_path)
-                except OSError:
-                    failure_digest = ""
-                report=EditReport("failed",run_id,failure_digest,report_path=str(report_path),source_path=str(source_path.resolve()),messages=[f"processing failed: {error}"])
-            try:
-                _write_report(report_path,report)
-            except OSError as report_error:
-                if output_owned: output_path.unlink(missing_ok=True)
-                if preview_owned: preview_path.unlink(missing_ok=True)
-                if processing_error is not None: raise report_error from processing_error
-                raise
-            return report
-    except Timeout:
-        report=EditReport("failed",run_id,report_path=str(report_path),source_path=str(source_path.resolve()),messages=[f"processing failed: timed out waiting {LOCK_TIMEOUT_SECONDS}s for source lock"])
-        _write_report(report_path,report)
+                    report, _, _ = _run_locked(
+                        request, ocr_backend, run_id, output_path, report_path, preview_path
+                    )
+                except (OSError, ValueError) as error:
+                    processing_error = error
+                    try:
+                        failure_digest = _source_digest(source_path)
+                    except OSError:
+                        failure_digest = ""
+                    report = EditReport(
+                        "failed", run_id, failure_digest,
+                        report_path=str(report_path), source_path=str(source_path),
+                        messages=[f"processing failed: {error}"],
+                    )
+                try:
+                    _write_report(report_path, report)
+                except OSError as report_error:
+                    if processing_error is not None:
+                        raise report_error from processing_error
+                    raise
+        except Timeout:
+            report = EditReport(
+                "failed", run_id, report_path=str(report_path), source_path=str(source_path),
+                messages=[f"processing failed: timed out waiting {LOCK_TIMEOUT_SECONDS}s for source lock"],
+            )
+            _write_report(report_path, report)
+
+        keep.add(report_path)
+        if report.status == "success":
+            keep.add(output_path)
+        elif report.status == "needs_confirmation" and report.preview_path:
+            keep.add(preview_path)
         return report
+    finally:
+        _discard(owned - keep)
