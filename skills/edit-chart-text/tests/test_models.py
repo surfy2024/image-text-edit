@@ -11,6 +11,7 @@ def test_model_field_types_match_pipeline_contract() -> None:
     report_hints = get_type_hints(EditReport)
 
     assert replacement_hints["candidate_number"] == int | None
+    assert replacement_hints["candidate_polygon"] == tuple[tuple[int, int], ...] | None
     assert candidate_hints["polygon"] == tuple[tuple[int, int], ...]
     assert style_hints["font_size"] is int
     assert report_hints["output_path"] == str | None

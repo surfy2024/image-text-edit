@@ -16,6 +16,14 @@ def candidate(x: int = 10) -> TextCandidate:
     )
 
 
+class FixedOCR:
+    def __init__(self, candidates):
+        self.candidates = tuple(candidates)
+
+    def detect(self, image_path):
+        return self.candidates
+
+
 class FakeOCR:
     def detect(self, image_path):
         return (candidate(),)
@@ -315,7 +323,7 @@ def test_candidate_number_closes_ambiguity_loop_and_edits_only_selected_candidat
 
     confirmed = EditRequest(
         source,
-        (Replacement("HZ", "CS", "one", candidate_number=2),),
+        (Replacement("HZ", "CS", "one", candidate_number=2, candidate_polygon=tuple(tuple(point) for point in selected["polygon"])),),
     )
     second_report = run_pipeline(confirmed, AmbiguousOCR())
 
@@ -330,18 +338,18 @@ def test_candidate_number_closes_ambiguity_loop_and_edits_only_selected_candidat
     assert second_payload["edits"][0]["polygon"] == expected_polygon
 
 
-def test_unknown_candidate_number_does_not_edit(tmp_path):
+def test_unmatched_candidate_polygon_does_not_edit(tmp_path):
     source = chart(tmp_path)
     request = EditRequest(
         source,
-        (Replacement("HZ", "CS", "one", candidate_number=99),),
+        (Replacement("HZ", "CS", "one", candidate_number=99, candidate_polygon=candidate(70).polygon),),
     )
 
     report = run_pipeline(request, AmbiguousOCR())
 
     assert report.status == "needs_confirmation"
     assert not (tmp_path / "chart_edited.png").exists()
-    assert any("99" in message and "不存在" in message for message in report.messages)
+    assert any("99" in message and "几何匹配数量为 0" in message for message in report.messages)
 
 
 def test_candidate_number_owned_by_other_replacement_does_not_edit(tmp_path):
@@ -349,7 +357,7 @@ def test_candidate_number_owned_by_other_replacement_does_not_edit(tmp_path):
     request = EditRequest(
         source,
         (
-            Replacement("HZ", "CS", "one", candidate_number=3),
+            Replacement("HZ", "CS", "one", candidate_number=1, candidate_polygon=((10, 26), (30, 26), (30, 38), (10, 38))),
             Replacement("P10", "P20", "ask"),
         ),
     )
@@ -358,7 +366,7 @@ def test_candidate_number_owned_by_other_replacement_does_not_edit(tmp_path):
 
     assert report.status == "needs_confirmation"
     assert not (tmp_path / "chart_edited.png").exists()
-    assert any("3" in message and "不属于" in message for message in report.messages)
+    assert any("1" in message and "几何匹配数量为 0" in message for message in report.messages)
 
 
 def test_conflict_candidate_number_survives_replacement_list_reduction(tmp_path):
@@ -387,6 +395,9 @@ def test_conflict_candidate_number_survives_replacement_list_reduction(tmp_path)
                 "P20",
                 "one",
                 candidate_number=selected["candidate_number"],
+                candidate_polygon=tuple(
+                    tuple(point) for point in selected["polygon"]
+                ),
             ),
         ),
     )
@@ -425,10 +436,138 @@ def test_fuzzy_candidate_only_becomes_ready_after_explicit_global_number(tmp_pat
 
     confirmed = EditRequest(
         source,
-        (Replacement("HZ", "CS", "one", candidate_number=1),),
+        (Replacement("HZ", "CS", "one", candidate_number=1, candidate_polygon=tuple(tuple(point) for point in first_report.edits[0]["polygon"])),),
     )
     second_report = run_pipeline(confirmed, FuzzyOCR())
 
     assert second_report.status == "success"
     assert len(second_report.edits) == 1
     assert second_report.edits[0]["polygon"] == first_report.edits[0]["polygon"]
+
+
+def test_polygon_fingerprint_survives_reversed_ocr_order(tmp_path):
+    source = chart(tmp_path)
+    initial = EditRequest(source, (Replacement("HZ", "CS", "ask"),))
+    first_report = run_pipeline(initial, AmbiguousOCR())
+    selected = first_report.edits[1]
+    confirmed = EditRequest(
+        source,
+        (
+            Replacement(
+                "HZ",
+                "CS",
+                "one",
+                candidate_number=selected["candidate_number"],
+                candidate_polygon=tuple(tuple(point) for point in selected["polygon"]),
+            ),
+        ),
+    )
+
+    second_report = run_pipeline(
+        confirmed, FixedOCR((candidate(40), candidate()))
+    )
+
+    assert second_report.status == "success"
+    assert second_report.edits[0]["polygon"] == selected["polygon"]
+
+
+def test_added_candidate_does_not_change_polygon_selection(tmp_path):
+    source = chart(tmp_path)
+    fingerprint = candidate(40).polygon
+    request = EditRequest(
+        source,
+        (
+            Replacement(
+                "HZ", "CS", "one", candidate_number=2, candidate_polygon=fingerprint
+            ),
+        ),
+    )
+
+    report = run_pipeline(request, FixedOCR((candidate(5), candidate(10), candidate(40))))
+
+    assert report.status == "success"
+    assert report.edits[0]["polygon"] == [list(point) for point in fingerprint]
+
+
+def test_deleted_candidate_does_not_fall_back_to_report_number(tmp_path):
+    source = chart(tmp_path)
+    request = EditRequest(
+        source,
+        (
+            Replacement(
+                "HZ",
+                "CS",
+                "one",
+                candidate_number=2,
+                candidate_polygon=candidate(40).polygon,
+            ),
+        ),
+    )
+
+    report = run_pipeline(request, FixedOCR((candidate(10), candidate(70))))
+
+    assert report.status == "needs_confirmation"
+    assert not (tmp_path / "chart_edited.png").exists()
+
+
+def test_small_polygon_drift_selects_unique_matching_candidate(tmp_path):
+    source = chart(tmp_path)
+    request = EditRequest(
+        source,
+        (
+            Replacement(
+                "HZ",
+                "CS",
+                "one",
+                candidate_number=2,
+                candidate_polygon=candidate(40).polygon,
+            ),
+        ),
+    )
+
+    report = run_pipeline(request, FixedOCR((candidate(10), candidate(41))))
+
+    assert report.status == "success"
+    assert report.edits[0]["polygon"] == [list(point) for point in candidate(41).polygon]
+
+
+def test_large_polygon_drift_requires_confirmation(tmp_path):
+    source = chart(tmp_path)
+    request = EditRequest(
+        source,
+        (
+            Replacement(
+                "HZ",
+                "CS",
+                "one",
+                candidate_number=2,
+                candidate_polygon=candidate(40).polygon,
+            ),
+        ),
+    )
+
+    report = run_pipeline(request, FixedOCR((candidate(10), candidate(58))))
+
+    assert report.status == "needs_confirmation"
+    assert not (tmp_path / "chart_edited.png").exists()
+
+
+def test_two_geometrically_close_candidates_require_confirmation(tmp_path):
+    source = chart(tmp_path)
+    request = EditRequest(
+        source,
+        (
+            Replacement(
+                "HZ",
+                "CS",
+                "one",
+                candidate_number=2,
+                candidate_polygon=candidate(40).polygon,
+            ),
+        ),
+    )
+
+    report = run_pipeline(request, FixedOCR((candidate(39), candidate(41))))
+
+    assert report.status == "needs_confirmation"
+    assert not (tmp_path / "chart_edited.png").exists()

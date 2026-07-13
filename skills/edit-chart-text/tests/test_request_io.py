@@ -135,13 +135,20 @@ def test_load_request_rejects_non_string_scope(tmp_path, scope) -> None:
         load_request(request_path)
 
 
-def test_load_request_preserves_candidate_number_and_defaults_to_none(tmp_path) -> None:
+def test_load_request_preserves_candidate_fingerprint_and_defaults_to_none(tmp_path) -> None:
+    polygon = [[40, 10], [60, 10], [60, 24], [40, 24]]
     request_path = write_request(
         tmp_path,
         {
             "image_path": "chart.png",
             "replacements": [
-                {"old_text": "HZ", "new_text": "CS", "candidate_number": 2},
+                {
+                    "old_text": "HZ",
+                    "new_text": "CS",
+                    "scope": "one",
+                    "candidate_number": 2,
+                    "candidate_polygon": polygon,
+                },
                 {"old_text": "P10", "new_text": "P20"},
             ],
         },
@@ -150,7 +157,11 @@ def test_load_request_preserves_candidate_number_and_defaults_to_none(tmp_path) 
     request = load_request(request_path)
 
     assert request.replacements[0].candidate_number == 2
+    assert request.replacements[0].candidate_polygon == tuple(
+        tuple(point) for point in polygon
+    )
     assert request.replacements[1].candidate_number is None
+    assert request.replacements[1].candidate_polygon is None
 
 
 @pytest.mark.parametrize("candidate_number", [None, True, False, 0, -1, 1.5, "2"])
@@ -165,11 +176,89 @@ def test_load_request_rejects_invalid_candidate_number(
                 {
                     "old_text": "HZ",
                     "new_text": "CS",
+                    "scope": "one",
                     "candidate_number": candidate_number,
+                    "candidate_polygon": [[10, 10], [30, 10], [30, 24], [10, 24]],
                 }
             ],
         },
     )
 
     with pytest.raises(ValueError, match="candidate_number"):
+        load_request(request_path)
+
+
+@pytest.mark.parametrize(
+    "replacement",
+    [
+        {"candidate_number": 1},
+        {"candidate_polygon": [[10, 10], [30, 10], [30, 24], [10, 24]]},
+    ],
+)
+def test_load_request_requires_candidate_number_and_polygon_together(
+    tmp_path, replacement
+) -> None:
+    replacement = {"old_text": "HZ", "new_text": "CS", "scope": "one", **replacement}
+    request_path = write_request(
+        tmp_path, {"image_path": "chart.png", "replacements": [replacement]}
+    )
+
+    with pytest.raises(ValueError, match="together"):
+        load_request(request_path)
+
+
+@pytest.mark.parametrize("scope", ["all", "ask"])
+def test_load_request_rejects_selection_outside_scope_one(tmp_path, scope) -> None:
+    request_path = write_request(
+        tmp_path,
+        {
+            "image_path": "chart.png",
+            "replacements": [
+                {
+                    "old_text": "HZ",
+                    "new_text": "CS",
+                    "scope": scope,
+                    "candidate_number": 1,
+                    "candidate_polygon": [[10, 10], [30, 10], [30, 24], [10, 24]],
+                }
+            ],
+        },
+    )
+
+    with pytest.raises(ValueError, match="scope=one"):
+        load_request(request_path)
+
+
+@pytest.mark.parametrize(
+    "polygon",
+    [
+        None,
+        True,
+        [],
+        [[0, 0], [1, 0], [1, 1]],
+        [[0, 0], [1, 0], [1, 1], [False, 1]],
+        [[0, 0], [1.5, 0], [1, 1], [0, 1]],
+        [[0, 0], [1, 0], [1, "1"], [0, 1]],
+        [[0, 0], [1, 0], [2, 0], [3, 0]],
+        [[0, 0], [1, 1], [0, 1], [1, 0]],
+    ],
+)
+def test_load_request_rejects_invalid_candidate_polygon(tmp_path, polygon) -> None:
+    request_path = write_request(
+        tmp_path,
+        {
+            "image_path": "chart.png",
+            "replacements": [
+                {
+                    "old_text": "HZ",
+                    "new_text": "CS",
+                    "scope": "one",
+                    "candidate_number": 1,
+                    "candidate_polygon": polygon,
+                }
+            ],
+        },
+    )
+
+    with pytest.raises(ValueError, match="candidate_polygon"):
         load_request(request_path)

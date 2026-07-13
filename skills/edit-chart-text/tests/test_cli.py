@@ -147,3 +147,39 @@ def test_main_unknown_status_is_protocol_error(monkeypatch, capsys, tmp_path):
 
     assert main(["--request", "request.json"]) == 4
     assert "protocol" in capsys.readouterr().err.lower()
+
+
+def test_main_rejects_selection_outside_scope_one_before_backend(
+    tmp_path, monkeypatch, capsys
+):
+    request_path = tmp_path / "request.json"
+    request_path.write_text(
+        json.dumps(
+            {
+                "image_path": str(tmp_path / "chart.png"),
+                "replacements": [
+                    {
+                        "old_text": "HZ",
+                        "new_text": "CS",
+                        "scope": "ask",
+                        "candidate_number": 1,
+                        "candidate_polygon": [
+                            [10, 10],
+                            [30, 10],
+                            [30, 24],
+                            [10, 24],
+                        ],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    def backend_must_not_run():
+        raise AssertionError("backend must not run for invalid request")
+
+    monkeypatch.setattr(cli, "PaddleOCRBackend", backend_must_not_run)
+
+    assert main(["--request", str(request_path)]) == 2
+    assert "scope=one" in capsys.readouterr().err

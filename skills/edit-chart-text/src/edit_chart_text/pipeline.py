@@ -148,36 +148,79 @@ def _numbered_entries(
     ]
 
 
-def _apply_candidate_numbers(
+def _polygon_bounds(
+    polygon: tuple[tuple[int, int], ...],
+) -> tuple[float, float, float, float]:
+    xs = [point[0] for point in polygon]
+    ys = [point[1] for point in polygon]
+    return float(min(xs)), float(min(ys)), float(max(xs)), float(max(ys))
+
+
+def _geometry_match_score(
+    fingerprint: tuple[tuple[int, int], ...],
+    candidate: TextCandidate,
+) -> float | None:
+    left, top, right, bottom = _polygon_bounds(fingerprint)
+    c_left, c_top, c_right, c_bottom = _polygon_bounds(candidate.polygon)
+    width, height = right - left, bottom - top
+    c_width, c_height = c_right - c_left, c_bottom - c_top
+    if min(width, height, c_width, c_height) <= 0:
+        return None
+    if not (0.80 <= c_width / width <= 1.25):
+        return None
+    if not (0.80 <= c_height / height <= 1.25):
+        return None
+
+    center_x, center_y = (left + right) / 2, (top + bottom) / 2
+    c_center_x, c_center_y = (c_left + c_right) / 2, (c_top + c_bottom) / 2
+    if abs(c_center_x - center_x) > max(3.0, width * 0.20):
+        return None
+    if abs(c_center_y - center_y) > max(3.0, height * 0.20):
+        return None
+
+    intersection = max(0.0, min(right, c_right) - max(left, c_left)) * max(
+        0.0, min(bottom, c_bottom) - max(top, c_top)
+    )
+    union = width * height + c_width * c_height - intersection
+    iou = intersection / union if union else 0.0
+    return iou if iou >= 0.65 else None
+
+
+def _resolve_selected_candidates(
     decisions: list[tuple[Replacement, MatchDecision]],
-    detected: tuple[TextCandidate, ...],
 ) -> tuple[list[tuple[Replacement, MatchDecision]], list[str]]:
     resolved: list[tuple[Replacement, MatchDecision]] = []
     messages: list[str] = []
     for replacement_index, (replacement, decision) in enumerate(decisions):
         number = replacement.candidate_number
-        if number is None:
+        fingerprint = replacement.candidate_polygon
+        if number is None and fingerprint is None:
             resolved.append((replacement, decision))
             continue
-        if number > len(detected):
+        if number is None or fingerprint is None or replacement.scope != "one":
             messages.append(
-                f"replacement[{replacement_index}] 的候选编号 {number} 不存在。"
+                f"replacement[{replacement_index}] 的候选确认字段无效。"
             )
             resolved.append(
                 (replacement, MatchDecision("needs_confirmation", decision.candidates))
             )
             continue
 
-        selected = detected[number - 1]
-        if not any(selected is candidate for candidate in decision.candidates):
+        matches = [
+            (score, candidate)
+            for candidate in decision.candidates
+            if (score := _geometry_match_score(fingerprint, candidate)) is not None
+        ]
+        if len(matches) != 1:
             messages.append(
-                f"候选编号 {number} 不属于 replacement[{replacement_index}]。"
+                f"replacement[{replacement_index}] 的候选编号 {number} "
+                f"几何匹配数量为 {len(matches)}，需要重新确认。"
             )
             resolved.append(
                 (replacement, MatchDecision("needs_confirmation", decision.candidates))
             )
         else:
-            resolved.append((replacement, MatchDecision("ready", (selected,))))
+            resolved.append((replacement, MatchDecision("ready", (matches[0][1],))))
     return resolved, messages
 
 def _confirmation_report(
@@ -327,9 +370,7 @@ def run_pipeline(request: EditRequest, ocr_backend) -> EditReport:
             for replacement in request.replacements
         ]
         global_numbers = _global_candidate_numbers(detected)
-        decisions, selection_messages = _apply_candidate_numbers(
-            decisions, detected
-        )
+        decisions, selection_messages = _resolve_selected_candidates(decisions)
         if any(decision.status != "ready" for _, decision in decisions):
             report = _confirmation_report(
                 source,
