@@ -28,6 +28,14 @@ def test_skill_documents_safe_substring_confirmation_fields() -> None:
 
     confirmation_rule = next(line for line in skill_lines if line.startswith("8. "))
     assert "从同一候选记录原样复制确认字段" in confirmation_rule
+    visual_rule = next(line for line in skill_lines if "`O`/`0`" in line)
+    assert "目视核对" in visual_rule
+    assert "完整 `source_label` 和 `target_label`" in visual_rule
+
+    override_rule = next(line for line in skill_lines if "`confirmed_source_label`" in line)
+    assert "`confirmed_target_label`" in override_rule
+    assert "仅替换所选 occurrence" in override_rule
+    assert "不得借此改写其他字符" in override_rule
     for field in (
         "candidate_token",
         "candidate_number",

@@ -20,6 +20,8 @@ class Replacement:
     candidate_token: str | None = None
     match_mode: MatchMode = "exact"
     substring_occurrence: int | None = None
+    confirmed_source_label: str | None = None
+    confirmed_target_label: str | None = None
 
 @dataclass(frozen=True)
 class EditRequest:

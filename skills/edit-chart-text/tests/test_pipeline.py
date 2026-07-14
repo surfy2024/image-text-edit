@@ -158,6 +158,66 @@ def test_substring_confirmation_reconfirms_when_occurrence_disappears(tmp_path):
     assert "reconfirm" in " ".join(result.messages).lower()
 
 
+def test_substring_confirmation_reconfirms_when_signed_label_drifts(tmp_path):
+    source=chart(tmp_path)
+    repeated=candidate("HZ-HZ")
+    first=run_pipeline(
+        EditRequest(source,(Replacement("HZ","CS","all",match_mode="substring"),)),
+        SequenceOCR((repeated,)),
+    )
+    chosen=first.edits[0]
+    confirmed=EditRequest(
+        source,
+        (Replacement(
+            "HZ","CS","one",
+            candidate_number=chosen["candidate_number"],
+            candidate_polygon=tuple(map(tuple,chosen["polygon"])),
+            candidate_token=chosen["candidate_token"],
+            match_mode="substring",
+            substring_occurrence=1,
+        ),),
+        Path(first.report_path),
+    )
+
+    drifted=candidate("HZ-DRIFT")
+    result=run_pipeline(
+        confirmed,
+        SequenceOCR((drifted,),(candidate("CS-DRIFT"),)),
+    )
+
+    assert result.status=="needs_confirmation"
+    assert result.output_path is None
+    assert "reconfirm" in " ".join(result.messages).lower()
+
+
+def test_substring_scope_all_rejects_partial_edit_when_matching_candidate_is_unsafe(tmp_path):
+    source=chart(tmp_path)
+    valid=candidate("HZ-A")
+    unsafe=TextCandidate("HZ-B",((-1,10),(20,10),(20,24),(-1,24)),.99)
+
+    result=run_pipeline(
+        EditRequest(source,(Replacement("HZ","CS","all",match_mode="substring"),)),
+        SequenceOCR((valid,unsafe),(candidate("CS-A"),)),
+    )
+
+    assert result.status=="needs_confirmation"
+    assert result.output_path is None
+    assert result.edits==[]
+    message=" ".join(result.messages).lower()
+    assert "unsafe" in message and "matching candidate" in message
+
+def test_substring_scope_all_ignores_unrelated_unsafe_candidate(tmp_path):
+    source=chart(tmp_path)
+    valid=candidate("HZ-A")
+    unrelated=TextCandidate("P10",((-1,10),(20,10),(20,24),(-1,24)),.99)
+
+    result=run_pipeline(
+        EditRequest(source,(Replacement("HZ","CS","all",match_mode="substring"),)),
+        SequenceOCR((valid,unrelated),(candidate("CS-A"),)),
+    )
+
+    assert result.status=="success",result.messages
+
 def test_fuzzy_match_never_auto_edits(tmp_path):
     source=chart(tmp_path)
     fuzzy=TextCandidate("HZZ",candidate().polygon,.99)

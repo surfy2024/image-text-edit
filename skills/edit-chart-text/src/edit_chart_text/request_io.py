@@ -29,6 +29,11 @@ def load_request(path: str | Path) -> EditRequest:
     if report_value is not None and (not isinstance(report_value, str) or not report_value.strip()):
         raise ValueError("confirmation_report_path must be a non-empty string")
     replacements = tuple(_load_replacement(item, index) for index, item in enumerate(raw))
+    has_confirmed_labels = any(
+        item.confirmed_source_label is not None for item in replacements
+    )
+    if has_confirmed_labels and report_value is None:
+        raise ValueError("confirmed labels require confirmation_report_path")
     if report_value is None:
         for index, replacement in enumerate(replacements):
             if replacement.substring_occurrence is not None:
@@ -85,6 +90,18 @@ def _load_replacement(item: Any, index: int) -> Replacement:
     number_present = "candidate_number" in item
     polygon_present = "candidate_polygon" in item
     token_present = "candidate_token" in item
+    confirmed_source_present = "confirmed_source_label" in item
+    confirmed_target_present = "confirmed_target_label" in item
+    if confirmed_source_present != confirmed_target_present:
+        raise ValueError(f"{context}.confirmed_source_label and confirmed_target_label must appear together")
+    confirmed_source = item.get("confirmed_source_label")
+    confirmed_target = item.get("confirmed_target_label")
+    if confirmed_source_present:
+        if (not isinstance(confirmed_source, str) or not confirmed_source.strip()
+                or not isinstance(confirmed_target, str) or not confirmed_target.strip()):
+            raise ValueError(f"{context}.confirmed labels must be non-empty strings")
+        if match_mode != "substring" or scope != "one":
+            raise ValueError(f"{context}.confirmed labels require match_mode=substring and scope=one")
     occurrence_present = "substring_occurrence" in item
     occurrence = item.get("substring_occurrence")
     if occurrence_present and (type(occurrence) is not int or occurrence <= 0):
@@ -110,6 +127,23 @@ def _load_replacement(item: Any, index: int) -> Replacement:
         token = item.get("candidate_token")
         if not isinstance(token, str) or len(token) < 16:
             raise ValueError(f"{context}.candidate_token must be a non-empty high-entropy token")
+    if confirmed_source_present:
+        if not (number_present and polygon_present and token_present and occurrence_present):
+            raise ValueError(f"{context}.confirmed labels require complete candidate selection fields")
+        positions = []
+        start = 0
+        while (position := confirmed_source.find(old_text.strip(), start)) != -1:
+            positions.append(position)
+            start = position + len(old_text.strip())
+        if occurrence > len(positions):
+            raise ValueError(f"{context}.confirmed_source_label does not contain the selected occurrence")
+        position = positions[occurrence - 1]
+        derived = (
+            confirmed_source[:position] + new_text.strip()
+            + confirmed_source[position + len(old_text.strip()):]
+        )
+        if confirmed_target != derived:
+            raise ValueError(f"{context}.confirmed_target_label must be strictly derived from confirmed_source_label")
     return Replacement(
         old_text=old_text.strip(),
         new_text=new_text.strip(),

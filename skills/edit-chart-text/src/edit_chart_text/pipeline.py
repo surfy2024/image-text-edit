@@ -19,6 +19,7 @@ from .matching import (
     MatchDecision,
     choose_candidates,
     derive_target_label,
+    has_ambiguous_unmodified_label,
     substring_occurrences,
 )
 from .models import EditReport, EditRequest, Replacement, TextCandidate
@@ -317,16 +318,26 @@ def _stage_preview(source: Image.Image, entries: list[CandidateEntry], destinati
 
 def _validated_candidates(candidates, image_size):
     valid: list[TextCandidate] = []
+    rejected: list[tuple[object, str]] = []
     messages: list[str] = []
     for index, candidate in enumerate(candidates):
         try:
             candidate_bounds(candidate, image_size)
         except (TypeError, ValueError) as error:
-            messages.append(f"ignored invalid OCR candidate[{index}]: {error}")
+            reason = str(error)
+            rejected.append((candidate, reason))
+            messages.append(f"ignored invalid OCR candidate[{index}]: {reason}")
         else:
             valid.append(candidate)
-    return tuple(valid), messages
+    return tuple(valid), tuple(rejected), messages
 
+
+def _rejected_candidate_matches(replacement: Replacement, candidate: object) -> bool:
+    if not isinstance(candidate, TextCandidate) or candidate.confidence < 0.80:
+        return False
+    if replacement.match_mode == "substring":
+        return replacement.old_text in candidate.text
+    return candidate.text == replacement.old_text
 
 def _global_candidate_numbers(candidates: tuple[TextCandidate, ...]) -> dict[int, int]:
     result: dict[int, int] = {}
@@ -423,9 +434,43 @@ def _verify_candidate_token(secret: bytes, token: str, payload: dict) -> bool:
     return hmac.compare_digest(supplied, expected)
 
 
-def _selection_error(
-    request: EditRequest, digest: str, identity: dict, secret: bytes
+def _confirmed_label_error(
+    request: EditRequest, index: int, replacement: Replacement
 ) -> str | None:
+    source = replacement.confirmed_source_label
+    target = replacement.confirmed_target_label
+    if (source is None) != (target is None):
+        return f"replacement[{index}] confirmed labels must appear together"
+    if source is None:
+        return None
+    if not source.strip() or not target or not target.strip():
+        return f"replacement[{index}] confirmed labels must be non-empty"
+    if (replacement.match_mode != "substring" or replacement.scope != "one"
+            or replacement.candidate_number is None
+            or replacement.candidate_polygon is None
+            or replacement.candidate_token is None
+            or replacement.substring_occurrence is None
+            or request.confirmation_report_path is None):
+        return f"replacement[{index}] confirmed labels require a complete substring confirmation selection"
+    try:
+        _, derived, _ = derive_target_label(
+            replacement,
+            TextCandidate(source, replacement.candidate_polygon, 1.0),
+            replacement.substring_occurrence,
+        )
+    except ValueError as error:
+        return f"replacement[{index}] confirmed_source_label is invalid: {error}"
+    if target != derived:
+        return f"replacement[{index}] confirmed_target_label is not strictly derived"
+    return None
+
+def _selection_error(
+    request: EditRequest, digest: str, identity: dict, secret: bytes,
+    verified_records: dict[int, dict] | None = None,
+) -> str | None:
+    for index, replacement in enumerate(request.replacements):
+        if error := _confirmed_label_error(request, index, replacement):
+            return error
     selected = [
         index for index, replacement in enumerate(request.replacements)
         if replacement.candidate_number is not None
@@ -503,9 +548,11 @@ def _selection_error(
         )
         if not expected:
             return f"replacement[{index}] token/number/polygon/text binding mismatch"
+        if verified_records is not None:
+            verified_records[index] = record
     return None
 
-def _resolve_selected(decisions):
+def _resolve_selected(decisions, verified_records=None):
     resolved=[]; messages=[]
     for index,(replacement,decision) in enumerate(decisions):
         if replacement.candidate_number is None:
@@ -517,7 +564,7 @@ def _resolve_selected(decisions):
             resolved.append((replacement,MatchDecision("needs_confirmation",decision.candidates)))
         else:
             try:
-                derive_target_label(replacement, matches[0])
+                current = derive_target_label(replacement, matches[0])
             except ValueError as error:
                 messages.append(
                     f"replacement[{index}] substring occurrence is no longer valid; "
@@ -527,7 +574,21 @@ def _resolve_selected(decisions):
                     replacement, MatchDecision("needs_confirmation", decision.candidates)
                 ))
             else:
-                resolved.append((replacement,MatchDecision("ready",(matches[0],))))
+                signed = (verified_records or {}).get(index)
+                signed_labels = None if signed is None else (
+                    signed.get("source_label"), signed.get("target_label"),
+                    signed.get("substring_occurrence"),
+                )
+                if signed_labels is not None and current != signed_labels:
+                    messages.append(
+                        f"replacement[{index}] current OCR label drifted from the signed "
+                        "candidate; reconfirm"
+                    )
+                    resolved.append((
+                        replacement, MatchDecision("needs_confirmation", decision.candidates)
+                    ))
+                else:
+                    resolved.append((replacement,MatchDecision("ready",(matches[0],))))
     return resolved,messages
 
 
@@ -682,24 +743,33 @@ def _post_validate(detected, edits, image_size) -> tuple[bool,list[dict],list[st
         ]
         target_label=edit["target_label"]
         source_label=edit["source_label"]
+        ocr_source_label=edit.get("ocr_source_label",source_label)
         match_mode=edit.get("match_mode", "exact")
         new=[candidate for candidate in region if _post_text_matches(candidate.text,target_label,match_mode)]
-        old=[candidate for candidate in region if _post_text_matches(candidate.text,source_label,match_mode)]
+        old_labels=tuple(dict.fromkeys((source_label,ocr_source_label)))
+        old=[candidate for candidate in region if any(
+            _post_text_matches(candidate.text,label,match_mode) for label in old_labels
+        )]
         passed=len(new)==1 and not old
         result={"passed":passed,"new_text_matches":len(new),"old_text_matches":len(old),
                 "confidence":new[0].confidence if len(new)==1 else None,
-                "source_label":source_label,"target_label":target_label}
+                "source_label":source_label,"target_label":target_label,
+                "ocr_source_label":ocr_source_label,
+                "ocr_target_label":edit.get("ocr_target_label",target_label),
+                "label_override":edit.get("label_override",False)}
         results.append(result)
         if len(new)!=1: messages.append(f"post-OCR new_text validation failed: expected one trusted {target_label!r}, got {len(new)}")
-        if old: messages.append(f"post-OCR old_text validation failed: {source_label!r} remains")
+        if old: messages.append(f"post-OCR old_text validation failed: one of {old_labels!r} remains")
     return not messages,results,messages
-
 def _ready(source, decisions, output_path, report_path, run_id, digest, identity, source_path, backend):
     working=source.copy(); boxes=[]; edits=[]
     for replacement,decision in decisions:
         for candidate in decision.candidates:
             candidate_bounds(candidate,source.size)
-            source_label,target_label,occurrence=derive_target_label(replacement,candidate)
+            ocr_source_label,ocr_target_label,occurrence=derive_target_label(replacement,candidate)
+            label_override=replacement.confirmed_source_label is not None
+            source_label=(replacement.confirmed_source_label if label_override else ocr_source_label)
+            target_label=(replacement.confirmed_target_label if label_override else ocr_target_label)
             style=estimate_style(source,candidate)
             working,allowed,method=repair_region(working,candidate,padding=EDIT_PADDING)
             working=render_replacement(working,candidate,target_label,style,allowed)
@@ -707,6 +777,8 @@ def _ready(source, decisions, output_path, report_path, run_id, digest, identity
             edits.append({"old_text":replacement.old_text,"new_text":replacement.new_text,
                           "match_mode":replacement.match_mode,"source_label":source_label,
                           "target_label":target_label,"substring_occurrence":occurrence,
+                          "ocr_source_label":ocr_source_label,"ocr_target_label":ocr_target_label,
+                          "label_override":label_override,
                           "confidence":candidate.confidence,"polygon":[list(p) for p in candidate.polygon],
                           "allowed_box":list(allowed),"repair_method":method,"style":asdict(style)})
     before=np.asarray(source); after=np.asarray(working)
@@ -775,8 +847,9 @@ def _run_locked(
     with Image.open(BytesIO(capture.data)) as opened:
         opened.load()
         source = opened.copy()
+    verified_records: dict[int, dict] = {}
     selection_error = _selection_error(
-        request, capture.digest, capture.identity, secret
+        request, capture.digest, capture.identity, secret, verified_records
     )
     if selection_error:
         return _RunWork(EditReport(
@@ -790,15 +863,39 @@ def _run_locked(
         raw_detected = tuple(backend.detect(snapshot))
     finally:
         snapshot.unlink(missing_ok=True)
-    detected, candidate_messages = _validated_candidates(raw_detected, source.size)
+    detected, rejected, candidate_messages = _validated_candidates(raw_detected, source.size)
     decisions = [
         (replacement, choose_candidates(replacement, detected))
         for replacement in request.replacements
     ]
     numbers = _global_candidate_numbers(detected)
-    decisions, selection_messages = _resolve_selected(decisions)
+    decisions, selection_messages = _resolve_selected(decisions, verified_records)
+    unsafe_scope_all = [
+        (index, replacement, candidate, reason)
+        for index, replacement in enumerate(request.replacements)
+        if replacement.scope == "all"
+        for candidate, reason in rejected
+        if _rejected_candidate_matches(replacement, candidate)
+    ]
+    if unsafe_scope_all:
+        messages = candidate_messages + [
+            f"replacement[{index}] unsafe matching candidate {candidate.text!r}: {reason}"
+            for index, replacement, candidate, reason in unsafe_scope_all
+        ]
+        report, preview_temporary = _confirmation(
+            source, decisions, numbers, preview_path, messages, run_id,
+            capture.digest, capture.identity, report_path, source_path, secret,
+        )
+        return _RunWork(report, preview_temporary=preview_temporary)
     if any(decision.status != "ready" for _, decision in decisions):
-        messages = candidate_messages + selection_messages + [
+        ambiguity_messages = [
+            f"replacement[{index}] visually confirm the unmodified O/0 label characters"
+            for index, (replacement, decision) in enumerate(decisions)
+            if replacement.match_mode == "substring"
+            and any(has_ambiguous_unmodified_label(replacement, candidate)
+                    for candidate in decision.candidates)
+        ]
+        messages = candidate_messages + selection_messages + ambiguity_messages + [
             f"{replacement.old_text!r}->{replacement.new_text!r}: {decision.status}"
             for replacement, decision in decisions if decision.status != "ready"
         ]

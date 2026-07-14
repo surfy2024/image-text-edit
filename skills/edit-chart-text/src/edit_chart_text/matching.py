@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 from difflib import SequenceMatcher
+import re
 from typing import Literal
 
 from .models import Replacement, TextCandidate
@@ -60,6 +61,16 @@ def derive_target_label(
     return candidate.text, target, selected
 
 
+def has_ambiguous_unmodified_label(
+    replacement: Replacement, candidate: TextCandidate
+) -> bool:
+    """Detect letter/O/0 OCR ambiguity outside every requested substring span."""
+    remainder = candidate.text.replace(replacement.old_text, "")
+    return bool(
+        re.search(r"[A-Za-z]{2,}[O0]", remainder)
+        or re.search(r"[O0][A-Za-z]{2,}", remainder)
+    )
+
 def choose_candidates(
     replacement: Replacement, candidates: tuple[TextCandidate, ...]
 ) -> MatchDecision:
@@ -73,6 +84,7 @@ def choose_candidates(
             return MatchDecision("not_found")
         if any(
             len(substring_occurrences(item.text, replacement.old_text)) != 1
+            or has_ambiguous_unmodified_label(replacement, item)
             for item in literal
         ):
             return MatchDecision("needs_confirmation", literal)

@@ -110,3 +110,9 @@
    - 原图哈希保持不变。
 
 实现完成后把已验证运行时文件同步到 `C:\Users\飞翔无限\.codex\skills\edit-chart-text`，刷新 editable CLI，并核对源码与安装副本哈希一致。
+
+## 最终安全审查补强
+
+- 二次确认时，当前 OCR 的完整源标签、派生目标标签和 occurrence 必须与已签名候选记录完全一致；仅有 polygon 几何重合不足以授权编辑，任何文本漂移都必须重新确认。
+- `scope=all` 必须保持全有或全无：只要有一个按同一匹配模式和置信度阈值本应匹配的候选因 polygon 不安全而被拒，整批不得部分编辑，也不得为不安全候选生成签名记录。
+- 人工确认完整标签只允许用于 substring、scope=one 的二次确认。`confirmed_source_label` 与 `confirmed_target_label` 必须成对提供，目标必须严格等于仅替换已绑定 occurrence 后的结果。候选 HMAC 继续绑定 OCR 原始完整标签；最终审计同时记录人工视觉真值、OCR 原始标签和 override 标记，post-OCR 验证人工目标且拒绝人工源或 OCR 源任一残留。
