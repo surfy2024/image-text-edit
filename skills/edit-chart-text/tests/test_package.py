@@ -15,6 +15,12 @@ def test_skill_documents_safe_substring_confirmation_fields() -> None:
     assert "match_mode" in skill_text
     assert "substring" in skill_text
     assert "substring_occurrence" in skill_text
+    assert (
+        "`candidate_token`、`candidate_number`、`polygon`（写入 `candidate_polygon`），"
+        "以及候选记录存在时的 `substring_occurrence`"
+        in skill_text
+    )
+
 
 def test_default_runtime_dependencies_include_ocr_engine_and_lock():
     import tomllib
