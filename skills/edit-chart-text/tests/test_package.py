@@ -7,6 +7,15 @@ def test_package_version() -> None:
 
 
 
+def test_skill_documents_safe_substring_confirmation_fields() -> None:
+    from pathlib import Path
+
+    skill_text = (Path(__file__).parents[1] / "SKILL.md").read_text(encoding="utf-8")
+
+    assert "match_mode" in skill_text
+    assert "substring" in skill_text
+    assert "substring_occurrence" in skill_text
+
 def test_default_runtime_dependencies_include_ocr_engine_and_lock():
     import tomllib
     from pathlib import Path
