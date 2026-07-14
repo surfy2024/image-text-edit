@@ -6,6 +6,7 @@ from typing import Any
 from .models import EditRequest, Replacement
 
 _VALID_SCOPES = {"one", "all", "ask"}
+_VALID_MATCH_MODES = {"exact", "substring"}
 
 def _resolved(value: str, base: Path) -> Path:
     path = Path(value.strip())
@@ -28,6 +29,12 @@ def load_request(path: str | Path) -> EditRequest:
     if report_value is not None and (not isinstance(report_value, str) or not report_value.strip()):
         raise ValueError("confirmation_report_path must be a non-empty string")
     replacements = tuple(_load_replacement(item, index) for index, item in enumerate(raw))
+    if report_value is None:
+        for index, replacement in enumerate(replacements):
+            if replacement.substring_occurrence is not None:
+                raise ValueError(
+                    f"replacements[{index}].substring_occurrence requires confirmation_report_path"
+                )
     has_selection = any(item.candidate_number is not None for item in replacements)
     if has_selection and report_value is None:
         raise ValueError("confirmation_report_path is required for candidate selection")
@@ -65,6 +72,11 @@ def _load_replacement(item: Any, index: int) -> Replacement:
     scope = item.get("scope", "ask")
     if not isinstance(scope, str) or scope not in _VALID_SCOPES:
         raise ValueError(f"{context}.scope must be one of: one, all, ask")
+    match_mode = item.get("match_mode", "exact")
+    if not isinstance(match_mode, str) or match_mode not in _VALID_MATCH_MODES:
+        raise ValueError(f"{context}.match_mode must be one of: exact, substring")
+    if match_mode == "substring" and old_text.strip() == new_text.strip():
+        raise ValueError(f"{context}.old_text and new_text must differ in substring mode")
     hint = item.get("location_hint")
     if hint is not None:
         if not isinstance(hint, str) or not hint.strip():
@@ -73,6 +85,14 @@ def _load_replacement(item: Any, index: int) -> Replacement:
     number_present = "candidate_number" in item
     polygon_present = "candidate_polygon" in item
     token_present = "candidate_token" in item
+    occurrence_present = "substring_occurrence" in item
+    occurrence = item.get("substring_occurrence")
+    if occurrence_present and (type(occurrence) is not int or occurrence <= 0):
+        raise ValueError(f"{context}.substring_occurrence must be a positive integer")
+    if occurrence_present and match_mode != "substring":
+        raise ValueError(f"{context}.substring_occurrence requires match_mode=substring")
+    if occurrence_present and not (number_present and polygon_present and token_present):
+        raise ValueError(f"{context}.substring_occurrence requires candidate selection fields")
     number = item.get("candidate_number")
     polygon = token = None
     if number_present and (type(number) is not int or number <= 0):
@@ -90,4 +110,14 @@ def _load_replacement(item: Any, index: int) -> Replacement:
         token = item.get("candidate_token")
         if not isinstance(token, str) or len(token) < 16:
             raise ValueError(f"{context}.candidate_token must be a non-empty high-entropy token")
-    return Replacement(old_text.strip(), new_text.strip(), scope, hint, number, polygon, token)
+    return Replacement(
+        old_text=old_text.strip(),
+        new_text=new_text.strip(),
+        scope=scope,
+        location_hint=hint,
+        candidate_number=number,
+        candidate_polygon=polygon,
+        candidate_token=token,
+        match_mode=match_mode,
+        substring_occurrence=occurrence,
+    )

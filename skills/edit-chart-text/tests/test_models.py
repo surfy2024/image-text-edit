@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import get_type_hints
+from typing import Literal, get_type_hints
 
 from edit_chart_text.models import EditReport, Replacement, TextCandidate, TextStyle
 
@@ -13,6 +13,8 @@ def test_model_field_types_match_pipeline_contract() -> None:
     assert replacement_hints["candidate_number"] == int | None
     assert replacement_hints["candidate_polygon"] == tuple[tuple[int, int], ...] | None
     assert replacement_hints["candidate_token"] == str | None
+    assert replacement_hints["match_mode"] == Literal["exact", "substring"]
+    assert replacement_hints["substring_occurrence"] == int | None
     assert candidate_hints["polygon"] == tuple[tuple[int, int], ...]
     assert style_hints["font_size"] is int
     assert report_hints["output_path"] == str | None

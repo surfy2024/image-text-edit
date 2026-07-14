@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Literal
 
 Scope = Literal["one", "all", "ask"]
+MatchMode = Literal["exact", "substring"]
 ReportStatus = Literal["success", "needs_confirmation", "failed"]
 Polygon = tuple[tuple[int, int], ...]
 
@@ -17,6 +18,8 @@ class Replacement:
     candidate_number: int | None = None
     candidate_polygon: Polygon | None = None
     candidate_token: str | None = None
+    match_mode: MatchMode = "exact"
+    substring_occurrence: int | None = None
 
 @dataclass(frozen=True)
 class EditRequest:

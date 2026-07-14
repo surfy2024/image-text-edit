@@ -34,6 +34,180 @@ def test_load_request_with_dynamic_replacements(tmp_path) -> None:
     assert request.replacements[1].old_text == "25.00"
     assert request.replacements[1].new_text == "26.50"
     assert request.replacements[1].scope == "ask"
+    assert request.replacements[0].match_mode == "exact"
+    assert request.replacements[0].substring_occurrence is None
+
+
+def test_load_request_accepts_explicit_substring_mode(tmp_path) -> None:
+    request_path = write_request(
+        tmp_path,
+        {
+            "image_path": "chart.png",
+            "replacements": [
+                {
+                    "old_text": "25.00",
+                    "new_text": "26.50",
+                    "match_mode": "substring",
+                }
+            ],
+        },
+    )
+
+    request = load_request(request_path)
+
+    assert request.replacements[0].match_mode == "substring"
+    assert request.replacements[0].substring_occurrence is None
+
+
+def test_load_request_accepts_confirmed_substring_occurrence(tmp_path) -> None:
+    polygon = [[10, 10], [30, 10], [30, 24], [10, 24]]
+    request_path = write_request(
+        tmp_path,
+        {
+            "image_path": "chart.png",
+            "confirmation_report_path": "prior.json",
+            "replacements": [
+                {
+                    "old_text": "25",
+                    "new_text": "26",
+                    "match_mode": "substring",
+                    "substring_occurrence": 2,
+                    "scope": "one",
+                    "candidate_number": 1,
+                    "candidate_polygon": polygon,
+                    "candidate_token": "secure-token-value",
+                }
+            ],
+        },
+    )
+
+    request = load_request(request_path)
+
+    assert request.replacements[0].match_mode == "substring"
+    assert request.replacements[0].substring_occurrence == 2
+
+
+def test_load_request_rejects_unknown_match_mode_with_context(tmp_path) -> None:
+    request_path = write_request(
+        tmp_path,
+        {
+            "image_path": "chart.png",
+            "replacements": [
+                {"old_text": "P10", "new_text": "P40", "match_mode": "fuzzy"}
+            ],
+        },
+    )
+
+    with pytest.raises(ValueError, match=r"replacements\[0\]\.match_mode"):
+        load_request(request_path)
+
+
+def test_load_request_rejects_equal_text_in_substring_mode(tmp_path) -> None:
+    request_path = write_request(
+        tmp_path,
+        {
+            "image_path": "chart.png",
+            "replacements": [
+                {"old_text": "P10", "new_text": "P10", "match_mode": "substring"}
+            ],
+        },
+    )
+
+    with pytest.raises(ValueError, match=r"replacements\[0\].*old_text.*new_text"):
+        load_request(request_path)
+
+
+def test_load_request_rejects_occurrence_in_exact_mode(tmp_path) -> None:
+    request_path = write_request(
+        tmp_path,
+        {
+            "image_path": "chart.png",
+            "replacements": [
+                {
+                    "old_text": "P10",
+                    "new_text": "P40",
+                    "match_mode": "exact",
+                    "substring_occurrence": 1,
+                }
+            ],
+        },
+    )
+
+    with pytest.raises(ValueError, match=r"replacements\[0\]\.substring_occurrence"):
+        load_request(request_path)
+
+
+@pytest.mark.parametrize("occurrence", [0, True])
+def test_load_request_rejects_invalid_substring_occurrence(
+    tmp_path, occurrence
+) -> None:
+    request_path = write_request(
+        tmp_path,
+        {
+            "image_path": "chart.png",
+            "replacements": [
+                {
+                    "old_text": "P10",
+                    "new_text": "P40",
+                    "match_mode": "substring",
+                    "substring_occurrence": occurrence,
+                }
+            ],
+        },
+    )
+
+    with pytest.raises(ValueError, match=r"replacements\[0\]\.substring_occurrence"):
+        load_request(request_path)
+
+
+def test_load_request_rejects_occurrence_without_confirmation_report_with_context(
+    tmp_path,
+) -> None:
+    request_path = write_request(
+        tmp_path,
+        {
+            "image_path": "chart.png",
+            "replacements": [
+                {
+                    "old_text": "P10",
+                    "new_text": "P40",
+                    "match_mode": "substring",
+                    "substring_occurrence": 1,
+                    "scope": "one",
+                    "candidate_number": 1,
+                    "candidate_polygon": [[10, 10], [30, 10], [30, 24], [10, 24]],
+                    "candidate_token": "secure-token-value",
+                }
+            ],
+        },
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=r"replacements\[0\].*confirmation_report_path",
+    ):
+        load_request(request_path)
+
+
+def test_load_request_rejects_occurrence_without_candidate_selection(tmp_path) -> None:
+    request_path = write_request(
+        tmp_path,
+        {
+            "image_path": "chart.png",
+            "replacements": [
+                {
+                    "old_text": "P10",
+                    "new_text": "P40",
+                    "match_mode": "substring",
+                    "substring_occurrence": 1,
+                    "scope": "one",
+                }
+            ],
+        },
+    )
+
+    with pytest.raises(ValueError, match=r"replacements\[0\].*candidate selection"):
+        load_request(request_path)
 
 
 @pytest.mark.parametrize(
