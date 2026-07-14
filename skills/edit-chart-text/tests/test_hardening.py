@@ -164,6 +164,38 @@ def test_substring_confirmation_token_accepts_its_bound_occurrence(tmp_path):
     assert result.status=="success",result.messages
 
 
+@pytest.mark.parametrize("field",["source_label","target_label"])
+def test_substring_confirmation_authenticates_full_label_fields(tmp_path,field):
+    source=chart(tmp_path)
+    repeated=item("HZ-HZ")
+    first=run_pipeline(
+        EditRequest(source,(Replacement("HZ","CS","all",match_mode="substring"),)),
+        SequenceOCR((repeated,)),
+    )
+    chosen=first.edits[0]
+    payload=json.loads(Path(first.report_path).read_text(encoding="utf-8"))
+    payload["edits"][0][field]="tampered-label"
+    Path(first.report_path).write_text(json.dumps(payload),encoding="utf-8")
+    confirmed=EditRequest(
+        source,
+        (Replacement(
+            "HZ","CS","one",
+            candidate_number=chosen["candidate_number"],
+            candidate_polygon=tuple(map(tuple,chosen["polygon"])),
+            candidate_token=chosen["candidate_token"],
+            match_mode="substring",
+            substring_occurrence=chosen["substring_occurrence"],
+        ),),
+        Path(first.report_path),
+    )
+
+    result=run_pipeline(confirmed,SequenceOCR((repeated,),(item("CS"),)))
+
+    assert result.status=="needs_confirmation"
+    assert result.output_path is None
+    assert "authentication" in " ".join(result.messages).lower()
+
+
 def test_confirmation_rejects_source_changed_after_report(tmp_path):
     source=chart(tmp_path)
     first=run_pipeline(EditRequest(source,(Replacement("HZ","CS","ask"),)), SequenceOCR((item(),item(x=40))))

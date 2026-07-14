@@ -73,6 +73,34 @@ def test_repeated_substring_reports_each_occurrence_with_full_label_identity(tmp
     assert len({edit["candidate_token"] for edit in report.edits})==2
 
 
+def test_substring_confirmation_reconfirms_when_occurrence_disappears(tmp_path):
+    source=chart(tmp_path)
+    repeated=candidate("HZ-HZ")
+    first=run_pipeline(
+        EditRequest(source,(Replacement("HZ","CS","all",match_mode="substring"),)),
+        SequenceOCR((repeated,)),
+    )
+    chosen=first.edits[1]
+    confirmed=EditRequest(
+        source,
+        (Replacement(
+            "HZ","CS","one",
+            candidate_number=chosen["candidate_number"],
+            candidate_polygon=tuple(map(tuple,chosen["polygon"])),
+            candidate_token=chosen["candidate_token"],
+            match_mode="substring",
+            substring_occurrence=2,
+        ),),
+        Path(first.report_path),
+    )
+
+    result=run_pipeline(confirmed,SequenceOCR((candidate("HZ"),),(candidate("CS"),)))
+
+    assert result.status=="needs_confirmation"
+    assert result.output_path is None
+    assert "reconfirm" in " ".join(result.messages).lower()
+
+
 def test_fuzzy_match_never_auto_edits(tmp_path):
     source=chart(tmp_path)
     fuzzy=TextCandidate("HZZ",candidate().polygon,.99)
