@@ -130,3 +130,44 @@ def test_low_confidence_literal_is_not_a_substring_candidate() -> None:
 
     assert result.status == "not_found"
     assert result.candidates == ()
+
+
+def test_substring_occurrences_rejects_empty_needle() -> None:
+    with pytest.raises(ValueError):
+        substring_occurrences("HZ", "")
+
+
+@pytest.mark.parametrize("occurrence", [True, False, 0, -1, 1.0, "1"])
+def test_explicit_substring_occurrence_requires_a_positive_integer(occurrence: object) -> None:
+    replacement = Replacement("HZ", "CS", match_mode="substring")
+
+    with pytest.raises(ValueError):
+        derive_target_label(replacement, candidate("HZ-HZ"), occurrence)
+
+
+def test_model_substring_occurrence_rejects_boolean_bypassing_parser() -> None:
+    replacement = Replacement(
+        "HZ", "CS", match_mode="substring", substring_occurrence=True
+    )
+
+    with pytest.raises(ValueError):
+        derive_target_label(replacement, candidate("HZ-HZ"))
+
+
+def test_explicit_occurrence_overrides_model_occurrence() -> None:
+    replacement = Replacement(
+        "HZ", "CS", match_mode="substring", substring_occurrence=2
+    )
+
+    assert derive_target_label(replacement, candidate("HZ-HZ"), 1) == (
+        "HZ-HZ",
+        "CS-HZ",
+        1,
+    )
+
+
+def test_derive_target_label_rejects_candidate_without_substring() -> None:
+    replacement = Replacement("HZ", "CS", match_mode="substring")
+
+    with pytest.raises(ValueError):
+        derive_target_label(replacement, candidate("CS21-1A"))

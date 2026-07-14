@@ -46,7 +46,9 @@ def derive_target_label(
         if len(positions) != 1:
             raise ValueError("substring occurrence must be specified unless unique")
         selected = 1
-    if selected < 1 or selected > len(positions):
+    if type(selected) is not int or selected <= 0:
+        raise ValueError("substring occurrence must be a positive integer")
+    if selected > len(positions):
         raise ValueError("substring occurrence is out of range")
 
     position = positions[selected - 1]
