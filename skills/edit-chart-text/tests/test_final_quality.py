@@ -121,7 +121,7 @@ def test_symlink_target_swap_is_detected_when_supported(tmp_path):
 
 
 def _edit_geometry():
-    return {"old_text":"HZ","new_text":"CS","polygon":[[10,10],[30,10],[30,24],[10,24]],"allowed_box":[8,8,32,26]}
+    return {"old_text":"HZ","new_text":"CS","source_label":"HZ","target_label":"CS","polygon":[[10,10],[30,10],[30,24],[10,24]],"allowed_box":[8,8,32,26]}
 
 
 def test_post_ocr_neighbor_at_allowed_corner_does_not_validate():

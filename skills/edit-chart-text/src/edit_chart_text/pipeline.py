@@ -649,14 +649,17 @@ def _post_validate(detected, edits, image_size) -> tuple[bool,list[dict],list[st
             candidate for candidate in detected
             if candidate.confidence >= .50 and _post_geometry_match(candidate,edit,image_size)
         ]
-        new=[candidate for candidate in region if candidate.text.strip()==edit["new_text"]]
-        old=[candidate for candidate in region if candidate.text.strip()==edit["old_text"]]
+        target_label=edit["target_label"]
+        source_label=edit["source_label"]
+        new=[candidate for candidate in region if candidate.text.strip()==target_label]
+        old=[candidate for candidate in region if candidate.text.strip()==source_label]
         passed=len(new)==1 and not old
         result={"passed":passed,"new_text_matches":len(new),"old_text_matches":len(old),
-                "confidence":new[0].confidence if len(new)==1 else None}
+                "confidence":new[0].confidence if len(new)==1 else None,
+                "source_label":source_label,"target_label":target_label}
         results.append(result)
-        if len(new)!=1: messages.append(f"post-OCR new_text validation failed: expected one trusted {edit['new_text']!r}, got {len(new)}")
-        if old: messages.append(f"post-OCR old_text validation failed: {edit['old_text']!r} remains")
+        if len(new)!=1: messages.append(f"post-OCR new_text validation failed: expected one trusted {target_label!r}, got {len(new)}")
+        if old: messages.append(f"post-OCR old_text validation failed: {source_label!r} remains")
     return not messages,results,messages
 
 def _ready(source, decisions, output_path, report_path, run_id, digest, identity, source_path, backend):
@@ -664,11 +667,14 @@ def _ready(source, decisions, output_path, report_path, run_id, digest, identity
     for replacement,decision in decisions:
         for candidate in decision.candidates:
             candidate_bounds(candidate,source.size)
+            source_label,target_label,occurrence=derive_target_label(replacement,candidate)
             style=estimate_style(source,candidate)
             working,allowed,method=repair_region(working,candidate,padding=EDIT_PADDING)
-            working=render_replacement(working,candidate,replacement.new_text,style,allowed)
+            working=render_replacement(working,candidate,target_label,style,allowed)
             boxes.append(allowed)
             edits.append({"old_text":replacement.old_text,"new_text":replacement.new_text,
+                          "match_mode":replacement.match_mode,"source_label":source_label,
+                          "target_label":target_label,"substring_occurrence":occurrence,
                           "confidence":candidate.confidence,"polygon":[list(p) for p in candidate.polygon],
                           "allowed_box":list(allowed),"repair_method":method,"style":asdict(style)})
     before=np.asarray(source); after=np.asarray(working)

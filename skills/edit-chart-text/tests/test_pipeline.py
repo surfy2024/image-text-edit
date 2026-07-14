@@ -73,6 +73,44 @@ def test_repeated_substring_reports_each_occurrence_with_full_label_identity(tmp
     assert len({edit["candidate_token"] for edit in report.edits})==2
 
 
+def test_substring_all_renders_and_validates_complete_target_labels(tmp_path, monkeypatch):
+    source=tmp_path/"chart.png"
+    image=Image.new("RGB",(360,50),"white")
+    draw=ImageDraw.Draw(image)
+    draw.text((10,10),"HZ25-4DPP",fill="black")
+    draw.text((190,10),"HZ25-8DPP",fill="black")
+    image.save(source)
+    first=TextCandidate("HZ25-4DPP",((10,10),(160,10),(160,30),(10,30)),.99)
+    second=TextCandidate("HZ25-8DPP",((190,10),(340,10),(340,30),(190,30)),.99)
+    rendered=[]
+    real_render=pipeline.render_replacement
+
+    def capture_render(image,item,text,style,allowed):
+        rendered.append(text)
+        return real_render(image,item,text,style,allowed)
+
+    monkeypatch.setattr(pipeline,"render_replacement",capture_render)
+    report=run_pipeline(
+        EditRequest(source,(Replacement("HZ","CS","all",match_mode="substring"),)),
+        SequenceOCR(
+            (first,second),
+            (
+                TextCandidate("CS25-4DPP",first.polygon,.99),
+                TextCandidate("CS25-8DPP",second.polygon,.99),
+            ),
+        ),
+    )
+
+    assert report.status=="success",report.messages
+    assert rendered==["CS25-4DPP","CS25-8DPP"]
+    assert [edit["source_label"] for edit in report.edits]==["HZ25-4DPP","HZ25-8DPP"]
+    assert [edit["target_label"] for edit in report.edits]==["CS25-4DPP","CS25-8DPP"]
+    assert [edit["match_mode"] for edit in report.edits]==["substring","substring"]
+    assert [edit["substring_occurrence"] for edit in report.edits]==[1,1]
+    assert all(edit["post_ocr_validation"]["passed"] for edit in report.edits)
+    assert [edit["post_ocr_validation"]["source_label"] for edit in report.edits]==["HZ25-4DPP","HZ25-8DPP"]
+    assert [edit["post_ocr_validation"]["target_label"] for edit in report.edits]==["CS25-4DPP","CS25-8DPP"]
+
 def test_substring_confirmation_reconfirms_when_occurrence_disappears(tmp_path):
     source=chart(tmp_path)
     repeated=candidate("HZ-HZ")

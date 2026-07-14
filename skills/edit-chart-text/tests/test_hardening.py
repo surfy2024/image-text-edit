@@ -69,6 +69,28 @@ def test_post_ocr_failure_does_not_publish_edited_image(tmp_path, post, fragment
     assert payload["status"] == "failed"
 
 
+def test_substring_missing_complete_post_ocr_target_fails_atomically_with_full_label_audit(tmp_path):
+    source=tmp_path/"chart.png"
+    image=Image.new("RGB",(240,50),"white")
+    ImageDraw.Draw(image).text((10,10),"HZ26-6DPP",fill="black")
+    image.save(source)
+    original=TextCandidate("HZ26-6DPP（待建）",((10,10),(230,10),(230,30),(10,30)),.99)
+    report=run_pipeline(
+        EditRequest(source,(Replacement("HZ","CS","one",match_mode="substring"),)),
+        SequenceOCR((original,),(TextCandidate("CS",original.polygon,.99),)),
+    )
+
+    assert report.status=="failed"
+    assert report.output_path is None
+    assert not tuple(tmp_path.glob("chart_*_edited.png"))
+    assert report.edits[0]["source_label"]=="HZ26-6DPP（待建）"
+    assert report.edits[0]["target_label"]=="CS26-6DPP（待建）"
+    validation=report.edits[0]["post_ocr_validation"]
+    assert validation["passed"] is False
+    assert validation["source_label"]=="HZ26-6DPP（待建）"
+    assert validation["target_label"]=="CS26-6DPP（待建）"
+    assert "post-OCR new_text validation failed" in " ".join(report.messages)
+
 def test_post_ocr_success_records_audit_fields_and_rgba_alpha(tmp_path):
     source=chart(tmp_path, "RGBA")
     source_alpha=Image.open(source).getchannel("A").tobytes()
@@ -159,7 +181,7 @@ def test_substring_confirmation_token_accepts_its_bound_occurrence(tmp_path):
         Path(first.report_path),
     )
 
-    result=run_pipeline(confirmed,SequenceOCR((repeated,),(item("CS"),)))
+    result=run_pipeline(confirmed,SequenceOCR((repeated,),(item("HZ-CS"),)))
 
     assert result.status=="success",result.messages
 
