@@ -7,6 +7,12 @@ from .models import EditRequest, Replacement
 
 _VALID_SCOPES = {"one", "all", "ask"}
 _VALID_MATCH_MODES = {"exact", "substring"}
+_TOP_LEVEL_FIELDS = {"image_path", "replacements", "confirmation_report_path"}
+_REPLACEMENT_FIELDS = {
+    "old_text", "new_text", "scope", "location_hint", "candidate_number",
+    "candidate_polygon", "candidate_token", "match_mode", "substring_occurrence",
+    "confirmed_source_label", "confirmed_target_label",
+}
 
 def _resolved(value: str, base: Path) -> Path:
     path = Path(value.strip())
@@ -17,6 +23,9 @@ def load_request(path: str | Path) -> EditRequest:
     payload = json.loads(request_path.read_text(encoding="utf-8"))
     if not isinstance(payload, dict):
         raise ValueError("top-level JSON value must be an object")
+    unknown = sorted(set(payload) - _TOP_LEVEL_FIELDS)
+    if unknown:
+        raise ValueError(f"top-level unknown fields: {unknown}")
     image_path = payload.get("image_path")
     if not isinstance(image_path, str) or not image_path.strip():
         raise ValueError("image_path must be a non-empty string")
@@ -71,6 +80,9 @@ def _load_replacement(item: Any, index: int) -> Replacement:
     context = f"replacements[{index}]"
     if not isinstance(item, dict):
         raise ValueError(f"{context} must be an object")
+    unknown = sorted(set(item) - _REPLACEMENT_FIELDS)
+    if unknown:
+        raise ValueError(f"{context} unknown fields: {unknown}")
     old_text, new_text = item.get("old_text"), item.get("new_text")
     if not isinstance(old_text, str) or not old_text.strip() or not isinstance(new_text, str) or not new_text.strip():
         raise ValueError(f"{context}.old_text and new_text must both be non-empty strings")

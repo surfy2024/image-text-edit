@@ -2,7 +2,6 @@
 
 from dataclasses import dataclass
 from difflib import SequenceMatcher
-import re
 from typing import Literal
 
 from .models import Replacement, TextCandidate
@@ -65,11 +64,19 @@ def has_ambiguous_unmodified_label(
     replacement: Replacement, candidate: TextCandidate
 ) -> bool:
     """Detect letter/O/0 OCR ambiguity outside every requested substring span."""
-    remainder = candidate.text.replace(replacement.old_text, "")
-    return bool(
-        re.search(r"[A-Za-z][O0]", remainder)
-        or re.search(r"[O0][A-Za-z]", remainder)
-    )
+    target_indexes = {
+        index
+        for position in substring_occurrences(candidate.text, replacement.old_text)
+        for index in range(position, position + len(replacement.old_text))
+    }
+    for index, (left, right) in enumerate(zip(candidate.text, candidate.text[1:])):
+        if index in target_indexes or index + 1 in target_indexes:
+            continue
+        left_is_letter = left.isascii() and left.isalpha()
+        right_is_letter = right.isascii() and right.isalpha()
+        if (left_is_letter and right in "O0") or (left in "O0" and right_is_letter):
+            return True
+    return False
 
 def choose_candidates(
     replacement: Replacement, candidates: tuple[TextCandidate, ...]

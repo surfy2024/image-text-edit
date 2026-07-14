@@ -52,6 +52,25 @@ def write_request(tmp_path,payload):
     return path
 
 
+@pytest.mark.parametrize("unknown",[
+    {"confirmed_souce_label":"HYSY115FPSO","confirmed_taret_label":"HYSYFPSO"},
+    {"unexpected_replacement_field":True},
+])
+def test_parser_rejects_unknown_replacement_fields_with_context(tmp_path,unknown):
+    payload=selection_payload()
+    payload["replacements"][0].update(unknown)
+
+    with pytest.raises(ValueError,match=r"replacements\[0\].*unknown"):
+        load_request(write_request(tmp_path,payload))
+
+
+def test_parser_rejects_unknown_top_level_field(tmp_path):
+    payload=selection_payload()
+    payload["unexpected_top_level_field"]=True
+
+    with pytest.raises(ValueError,match="top-level.*unknown"):
+        load_request(write_request(tmp_path,payload))
+
 def test_parser_preserves_valid_confirmed_complete_labels(tmp_path):
     replacement=load_request(write_request(tmp_path,selection_payload())).replacements[0]
 

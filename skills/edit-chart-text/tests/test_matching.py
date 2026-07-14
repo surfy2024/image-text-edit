@@ -3,6 +3,7 @@ import pytest
 from edit_chart_text.matching import (
     choose_candidates,
     derive_target_label,
+    has_ambiguous_unmodified_label,
     substring_occurrences,
 )
 from edit_chart_text.models import Replacement, TextCandidate
@@ -171,3 +172,15 @@ def test_derive_target_label_rejects_candidate_without_substring() -> None:
 
     with pytest.raises(ValueError):
         derive_target_label(replacement, candidate("CS21-1A"))
+@pytest.mark.parametrize("label",["HZA0","0AHZ","HZ-A0-HZ"])
+def test_ambiguous_unmodified_label_detects_actual_adjacent_pairs(label) -> None:
+    replacement=Replacement("HZ","CS","one",match_mode="substring")
+
+    assert has_ambiguous_unmodified_label(replacement,candidate(label)) is True
+
+
+@pytest.mark.parametrize("label",["AHZ0","0HZA","AHZ0-HZ"])
+def test_ambiguous_unmodified_label_does_not_stitch_across_target_spans(label) -> None:
+    replacement=Replacement("HZ","CS","one",match_mode="substring")
+
+    assert has_ambiguous_unmodified_label(replacement,candidate(label)) is False
