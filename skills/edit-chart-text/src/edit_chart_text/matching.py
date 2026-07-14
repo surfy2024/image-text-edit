@@ -67,8 +67,8 @@ def has_ambiguous_unmodified_label(
     """Detect letter/O/0 OCR ambiguity outside every requested substring span."""
     remainder = candidate.text.replace(replacement.old_text, "")
     return bool(
-        re.search(r"[A-Za-z]{2,}[O0]", remainder)
-        or re.search(r"[O0][A-Za-z]{2,}", remainder)
+        re.search(r"[A-Za-z][O0]", remainder)
+        or re.search(r"[O0][A-Za-z]", remainder)
     )
 
 def choose_candidates(

@@ -52,6 +52,12 @@ def write_request(tmp_path,payload):
     return path
 
 
+def test_parser_preserves_valid_confirmed_complete_labels(tmp_path):
+    replacement=load_request(write_request(tmp_path,selection_payload())).replacements[0]
+
+    assert replacement.confirmed_source_label=="HYSY115FPSO"
+    assert replacement.confirmed_target_label=="HYSYFPSO"
+
 def test_replacement_models_confirmed_complete_labels():
     replacement=Replacement(
         "HYSY115","HYSY","one",match_mode="substring",substring_occurrence=1,
@@ -171,6 +177,19 @@ def test_post_ocr_rejects_remaining_ocr_source_variant():
     assert passed is False
     assert any("old_text" in message for message in messages)
 
+
+@pytest.mark.parametrize("ocr_label",["HZA0","0AHZ"])
+def test_single_letter_next_to_o_or_zero_requires_visual_confirmation(tmp_path,ocr_label):
+    source=chart(tmp_path)
+
+    result=run_pipeline(
+        EditRequest(source,(Replacement("HZ","CS","one",match_mode="substring"),)),
+        SequenceOCR((candidate(ocr_label),)),
+    )
+
+    assert result.status=="needs_confirmation"
+    assert result.output_path is None
+    assert "visually" in " ".join(result.messages).lower()
 
 def test_plain_hz_substring_still_auto_ready(tmp_path):
     source=chart(tmp_path)

@@ -154,4 +154,6 @@ def _load_replacement(item: Any, index: int) -> Replacement:
         candidate_token=token,
         match_mode=match_mode,
         substring_occurrence=occurrence,
+        confirmed_source_label=confirmed_source,
+        confirmed_target_label=confirmed_target,
     )
