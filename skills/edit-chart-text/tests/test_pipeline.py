@@ -53,6 +53,26 @@ def test_ambiguous_ask_publishes_only_unique_preview_and_report(tmp_path):
     assert all(e["candidate_token"] for e in report.edits)
 
 
+def test_repeated_substring_reports_each_occurrence_with_full_label_identity(tmp_path):
+    source=chart(tmp_path)
+    repeated=candidate("HZ-HZ")
+    request=EditRequest(
+        source,
+        (Replacement("HZ","CS","all",match_mode="substring"),),
+    )
+
+    report=run_pipeline(request,SequenceOCR((repeated,)))
+
+    assert report.status=="needs_confirmation"
+    assert [edit["substring_occurrence"] for edit in report.edits]==[1,2]
+    assert [edit["source_label"] for edit in report.edits]==["HZ-HZ","HZ-HZ"]
+    assert [edit["target_label"] for edit in report.edits]==["CS-HZ","HZ-CS"]
+    assert [edit["match_mode"] for edit in report.edits]==["substring","substring"]
+    assert len({edit["candidate_number"] for edit in report.edits})==1
+    assert len({tuple(map(tuple,edit["polygon"])) for edit in report.edits})==1
+    assert len({edit["candidate_token"] for edit in report.edits})==2
+
+
 def test_fuzzy_match_never_auto_edits(tmp_path):
     source=chart(tmp_path)
     fuzzy=TextCandidate("HZZ",candidate().polygon,.99)

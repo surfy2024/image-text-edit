@@ -107,6 +107,63 @@ def test_confirmation_token_binds_report_source_replacement_and_polygon(tmp_path
     assert rejected.output_path is None
 
 
+def test_substring_confirmation_token_rejects_occurrence_tampering(tmp_path):
+    source=chart(tmp_path)
+    repeated=item("HZ-HZ")
+    first=run_pipeline(
+        EditRequest(source,(Replacement("HZ","CS","all",match_mode="substring"),)),
+        SequenceOCR((repeated,)),
+    )
+    chosen=first.edits[0]
+    tampered=EditRequest(
+        source,
+        (Replacement(
+            "HZ","CS","one",
+            candidate_number=chosen["candidate_number"],
+            candidate_polygon=tuple(map(tuple,chosen["polygon"])),
+            candidate_token=chosen["candidate_token"],
+            match_mode="substring",
+            substring_occurrence=2,
+        ),),
+        Path(first.report_path),
+    )
+
+    rejected=run_pipeline(tampered,SequenceOCR((repeated,)))
+
+    assert rejected.status=="needs_confirmation"
+    assert rejected.output_path is None
+    assert any(
+        fragment in " ".join(rejected.messages).lower()
+        for fragment in ("binding","authentication")
+    )
+
+
+def test_substring_confirmation_token_accepts_its_bound_occurrence(tmp_path):
+    source=chart(tmp_path)
+    repeated=item("HZ-HZ")
+    first=run_pipeline(
+        EditRequest(source,(Replacement("HZ","CS","all",match_mode="substring"),)),
+        SequenceOCR((repeated,)),
+    )
+    chosen=first.edits[1]
+    confirmed=EditRequest(
+        source,
+        (Replacement(
+            "HZ","CS","one",
+            candidate_number=chosen["candidate_number"],
+            candidate_polygon=tuple(map(tuple,chosen["polygon"])),
+            candidate_token=chosen["candidate_token"],
+            match_mode="substring",
+            substring_occurrence=chosen["substring_occurrence"],
+        ),),
+        Path(first.report_path),
+    )
+
+    result=run_pipeline(confirmed,SequenceOCR((repeated,),(item("CS"),)))
+
+    assert result.status=="success",result.messages
+
+
 def test_confirmation_rejects_source_changed_after_report(tmp_path):
     source=chart(tmp_path)
     first=run_pipeline(EditRequest(source,(Replacement("HZ","CS","ask"),)), SequenceOCR((item(),item(x=40))))

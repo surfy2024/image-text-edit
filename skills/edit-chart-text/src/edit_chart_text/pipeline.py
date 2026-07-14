@@ -15,7 +15,12 @@ from filelock import FileLock, Timeout
 import numpy as np
 from PIL import Image, ImageDraw
 
-from .matching import MatchDecision, choose_candidates
+from .matching import (
+    MatchDecision,
+    choose_candidates,
+    derive_target_label,
+    substring_occurrences,
+)
 from .models import EditReport, EditRequest, Replacement, TextCandidate
 from .repair import repair_region
 from .render import render_replacement
@@ -24,7 +29,7 @@ from .validate import unchanged_outside
 
 EDIT_PADDING = 2
 LOCK_TIMEOUT_SECONDS = 30
-CandidateEntry = tuple[int, int, Replacement, TextCandidate]
+CandidateEntry = tuple[int, int, Replacement, TextCandidate, int | None]
 
 
 class ArtifactPublishError(RuntimeError):
@@ -298,7 +303,7 @@ def _stage_preview(source: Image.Image, entries: list[CandidateEntry], destinati
     preview = source.convert("RGB").copy()
     draw = ImageDraw.Draw(preview)
     labels: dict[tuple[tuple[int, int], ...], set[int]] = {}
-    for number, _, _, candidate in entries:
+    for number, _, _, candidate, _ in entries:
         labels.setdefault(candidate.polygon, set()).add(number)
     for polygon, numbers in labels.items():
         points = list(polygon)
@@ -331,10 +336,22 @@ def _global_candidate_numbers(candidates: tuple[TextCandidate, ...]) -> dict[int
 
 
 def _numbered_entries(decisions, numbers, *, include_ready: bool) -> list[CandidateEntry]:
-    return [(numbers[id(candidate)], index, replacement, candidate)
-            for index, (replacement, decision) in enumerate(decisions)
-            if include_ready or decision.status != "ready"
-            for candidate in decision.candidates]
+    entries: list[CandidateEntry] = []
+    for index, (replacement, decision) in enumerate(decisions):
+        if not include_ready and decision.status == "ready":
+            continue
+        for candidate in decision.candidates:
+            if replacement.match_mode == "substring":
+                occurrences = range(1, len(substring_occurrences(
+                    candidate.text, replacement.old_text
+                )) + 1)
+            else:
+                occurrences = (None,)
+            entries.extend(
+                (numbers[id(candidate)], index, replacement, candidate, occurrence)
+                for occurrence in occurrences
+            )
+    return entries
 
 
 def _polygon_bounds(polygon):
@@ -358,7 +375,8 @@ def _geometry_match_score(fingerprint, candidate: TextCandidate) -> float | None
 
 def _candidate_payload(
     *, report_path, run_id, source_path, source_sha256, source_identity,
-    replacement_index, old_text, new_text, candidate_number, polygon,
+    replacement_index, old_text, new_text, match_mode, source_label, target_label,
+    substring_occurrence, candidate_number, polygon,
 ) -> dict:
     return {
         "report_path": str(Path(report_path).resolve()),
@@ -369,6 +387,10 @@ def _candidate_payload(
         "replacement_index": replacement_index,
         "old_text": old_text,
         "new_text": new_text,
+        "match_mode": match_mode,
+        "source_label": source_label,
+        "target_label": target_label,
+        "substring_occurrence": substring_occurrence,
         "candidate_number": candidate_number,
         "polygon": polygon,
     }
@@ -453,9 +475,20 @@ def _selection_error(
             replacement_index=record.get("replacement_index"),
             old_text=record.get("old_text"),
             new_text=record.get("new_text"),
+            match_mode=record.get("match_mode"),
+            source_label=record.get("source_label"),
+            target_label=record.get("target_label"),
+            substring_occurrence=record.get("substring_occurrence"),
             candidate_number=record.get("candidate_number"),
             polygon=record.get("polygon"),
         )
+        if record.get("match_mode") == "substring" and (
+            not isinstance(record.get("source_label"), str)
+            or not record["source_label"]
+            or not isinstance(record.get("target_label"), str)
+            or not record["target_label"]
+        ):
+            return f"replacement[{index}] candidate token authentication failed"
         if not _verify_candidate_token(secret, record["candidate_token"], token_payload):
             return f"replacement[{index}] candidate token authentication failed"
         expected = (
@@ -463,6 +496,8 @@ def _selection_error(
             and record.get("replacement_index") == index
             and record.get("old_text") == replacement.old_text
             and record.get("new_text") == replacement.new_text
+            and record.get("match_mode") == replacement.match_mode
+            and record.get("substring_occurrence") == replacement.substring_occurrence
             and record.get("candidate_number") == replacement.candidate_number
             and record.get("polygon") == polygon
         )
@@ -481,20 +516,36 @@ def _resolve_selected(decisions):
             messages.append(f"replacement[{index}] candidate geometry matched {len(matches)} current OCR items; reconfirm")
             resolved.append((replacement,MatchDecision("needs_confirmation",decision.candidates)))
         else:
-            resolved.append((replacement,MatchDecision("ready",(matches[0],))))
+            try:
+                derive_target_label(replacement, matches[0])
+            except ValueError as error:
+                messages.append(
+                    f"replacement[{index}] substring occurrence is no longer valid; "
+                    f"reconfirm: {error}"
+                )
+                resolved.append((
+                    replacement, MatchDecision("needs_confirmation", decision.candidates)
+                ))
+            else:
+                resolved.append((replacement,MatchDecision("ready",(matches[0],))))
     return resolved,messages
 
 
 def _candidate_record(
-    number, index, replacement, candidate, *, run_id, digest, identity,
+    number, index, replacement, candidate, occurrence, *, run_id, digest, identity,
     report_path, source_path, secret,
 ):
     polygon = [list(point) for point in candidate.polygon]
+    source_label, target_label, occurrence = derive_target_label(
+        replacement, candidate, occurrence
+    )
     payload = _candidate_payload(
         report_path=report_path, run_id=run_id, source_path=source_path,
         source_sha256=digest, source_identity=identity,
         replacement_index=index, old_text=replacement.old_text,
-        new_text=replacement.new_text, candidate_number=number, polygon=polygon,
+        new_text=replacement.new_text, match_mode=replacement.match_mode,
+        source_label=source_label, target_label=target_label,
+        substring_occurrence=occurrence, candidate_number=number, polygon=polygon,
     )
     return {
         "run_id": run_id,
@@ -503,6 +554,10 @@ def _candidate_record(
         "replacement_index": index,
         "old_text": replacement.old_text,
         "new_text": replacement.new_text,
+        "match_mode": replacement.match_mode,
+        "source_label": source_label,
+        "target_label": target_label,
+        "substring_occurrence": occurrence,
         "text": candidate.text,
         "confidence": candidate.confidence,
         "polygon": polygon,
