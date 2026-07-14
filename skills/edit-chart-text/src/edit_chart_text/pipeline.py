@@ -642,6 +642,15 @@ def _post_geometry_match(candidate: TextCandidate, edit: dict, image_size) -> bo
     )
 
 
+def _post_text_matches(candidate_text: str, expected_text: str, match_mode: str) -> bool:
+    candidate = candidate_text.strip()
+    expected = expected_text.strip()
+    if match_mode != "substring":
+        return candidate == expected
+    punctuation = str.maketrans({"（": "(", "）": ")"})
+    return candidate.translate(punctuation) == expected.translate(punctuation)
+
+
 def _post_validate(detected, edits, image_size) -> tuple[bool,list[dict],list[str]]:
     results=[]; messages=[]
     for edit in edits:
@@ -651,8 +660,9 @@ def _post_validate(detected, edits, image_size) -> tuple[bool,list[dict],list[st
         ]
         target_label=edit["target_label"]
         source_label=edit["source_label"]
-        new=[candidate for candidate in region if candidate.text.strip()==target_label.strip()]
-        old=[candidate for candidate in region if candidate.text.strip()==source_label.strip()]
+        match_mode=edit.get("match_mode", "exact")
+        new=[candidate for candidate in region if _post_text_matches(candidate.text,target_label,match_mode)]
+        old=[candidate for candidate in region if _post_text_matches(candidate.text,source_label,match_mode)]
         passed=len(new)==1 and not old
         result={"passed":passed,"new_text_matches":len(new),"old_text_matches":len(old),
                 "confidence":new[0].confidence if len(new)==1 else None,
