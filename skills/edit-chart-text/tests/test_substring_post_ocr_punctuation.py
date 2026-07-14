@@ -63,6 +63,47 @@ def test_substring_post_ocr_rejects_mixed_ascii_open_fullwidth_close():
     assert passed is False
     assert results[0]["new_text_matches"] == 0
 
+def test_substring_post_ocr_rejects_crossed_ascii_fullwidth_nesting():
+    edit = {
+        **_edit(match_mode="substring"),
+        "source_label": "HZ（a(b)）",
+        "target_label": "CS（a(b)）",
+    }
+    crossed = _candidate("CS（a(b）)")
+
+    passed, results, _ = pipeline._post_validate((crossed,), (edit,), (100, 40))
+
+    assert passed is False
+    assert results[0]["new_text_matches"] == 0
+
+
+def test_substring_post_ocr_accepts_legal_mixed_width_nested_pairs():
+    edit = {
+        **_edit(match_mode="substring"),
+        "source_label": "HZ（a(b)）",
+        "target_label": "CS（a(b)）",
+    }
+    recognized = _candidate("CS(a(b))")
+
+    passed, results, _ = pipeline._post_validate((recognized,), (edit,), (100, 40))
+
+    assert passed is True
+    assert results[0]["new_text_matches"] == 1
+
+
+def test_substring_post_ocr_accepts_multiple_legal_fullwidth_pairs():
+    edit = {
+        **_edit(match_mode="substring"),
+        "source_label": "HZ（a）-（b）",
+        "target_label": "CS（a）-（b）",
+    }
+    recognized = _candidate("CS(a)-(b)")
+
+    passed, results, _ = pipeline._post_validate((recognized,), (edit,), (100, 40))
+
+    assert passed is True
+    assert results[0]["new_text_matches"] == 1
+
 def test_substring_post_ocr_detects_old_label_with_ascii_parentheses():
     passed, results, messages = pipeline._post_validate(
         (_candidate("HZ26-6DPP(待建)"),), (_edit(match_mode="substring"),), (100, 40)

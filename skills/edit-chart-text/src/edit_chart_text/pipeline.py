@@ -642,16 +642,22 @@ def _post_geometry_match(candidate: TextCandidate, edit: dict, image_size) -> bo
     )
 
 
-def _normalize_paired_parentheses(text: str) -> str:
+def _normalize_paired_parentheses(text: str) -> str | None:
     characters = list(text)
-    openers: list[int] = []
+    openers: list[tuple[str, int]] = []
+    expected_openers = {")": "(", "）": "（"}
     for index, character in enumerate(characters):
-        if character == "（":
-            openers.append(index)
-        elif character == "）" and openers:
-            opener = openers.pop()
-            characters[opener] = "("
-            characters[index] = ")"
+        if character in ("(", "（"):
+            openers.append((character, index))
+        elif character in expected_openers:
+            if not openers or openers[-1][0] != expected_openers[character]:
+                return None
+            opener, opener_index = openers.pop()
+            if opener == "（":
+                characters[opener_index] = "("
+                characters[index] = ")"
+    if openers:
+        return None
     return "".join(characters)
 
 
@@ -660,7 +666,11 @@ def _post_text_matches(candidate_text: str, expected_text: str, match_mode: str)
     expected = expected_text.strip()
     if match_mode != "substring":
         return candidate == expected
-    return _normalize_paired_parentheses(candidate) == _normalize_paired_parentheses(expected)
+    normalized_candidate = _normalize_paired_parentheses(candidate)
+    normalized_expected = _normalize_paired_parentheses(expected)
+    if normalized_candidate is None or normalized_expected is None:
+        return candidate == expected
+    return normalized_candidate == normalized_expected
 
 
 def _post_validate(detected, edits, image_size) -> tuple[bool,list[dict],list[str]]:
