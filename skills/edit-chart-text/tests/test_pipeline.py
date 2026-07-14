@@ -111,6 +111,25 @@ def test_substring_all_renders_and_validates_complete_target_labels(tmp_path, mo
     assert [edit["post_ocr_validation"]["source_label"] for edit in report.edits]==["HZ25-4DPP","HZ25-8DPP"]
     assert [edit["post_ocr_validation"]["target_label"] for edit in report.edits]==["CS25-4DPP","CS25-8DPP"]
 
+def test_substring_post_ocr_normalizes_expected_label_whitespace_without_changing_audit(tmp_path):
+    source=tmp_path/"chart.png"
+    image=Image.new("RGB",(200,50),"white")
+    ImageDraw.Draw(image).text((10,10),"HZ25-4DPP",fill="black")
+    image.save(source)
+    original=TextCandidate(" HZ25-4DPP ",((10,10),(190,10),(190,30),(10,30)),.99)
+
+    report=run_pipeline(
+        EditRequest(source,(Replacement("HZ","CS","one",match_mode="substring"),)),
+        SequenceOCR((original,),(TextCandidate("CS25-4DPP",original.polygon,.99),)),
+    )
+
+    assert report.status=="success",report.messages
+    edit=report.edits[0]
+    assert edit["source_label"]==" HZ25-4DPP "
+    assert edit["target_label"]==" CS25-4DPP "
+    assert edit["post_ocr_validation"]["source_label"]==" HZ25-4DPP "
+    assert edit["post_ocr_validation"]["target_label"]==" CS25-4DPP "
+
 def test_substring_confirmation_reconfirms_when_occurrence_disappears(tmp_path):
     source=chart(tmp_path)
     repeated=candidate("HZ-HZ")

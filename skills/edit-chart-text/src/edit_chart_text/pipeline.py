@@ -651,8 +651,8 @@ def _post_validate(detected, edits, image_size) -> tuple[bool,list[dict],list[st
         ]
         target_label=edit["target_label"]
         source_label=edit["source_label"]
-        new=[candidate for candidate in region if candidate.text.strip()==target_label]
-        old=[candidate for candidate in region if candidate.text.strip()==source_label]
+        new=[candidate for candidate in region if candidate.text.strip()==target_label.strip()]
+        old=[candidate for candidate in region if candidate.text.strip()==source_label.strip()]
         passed=len(new)==1 and not old
         result={"passed":passed,"new_text_matches":len(new),"old_text_matches":len(old),
                 "confidence":new[0].confidence if len(new)==1 else None,
