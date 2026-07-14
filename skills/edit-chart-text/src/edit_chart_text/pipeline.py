@@ -669,7 +669,7 @@ def _post_text_matches(candidate_text: str, expected_text: str, match_mode: str)
     normalized_candidate = _normalize_paired_parentheses(candidate)
     normalized_expected = _normalize_paired_parentheses(expected)
     if normalized_candidate is None or normalized_expected is None:
-        return candidate == expected
+        return False
     return normalized_candidate == normalized_expected
 
 

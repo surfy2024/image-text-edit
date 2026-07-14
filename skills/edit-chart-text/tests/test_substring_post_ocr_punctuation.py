@@ -1,3 +1,5 @@
+import pytest
+
 import edit_chart_text.pipeline as pipeline
 from edit_chart_text.models import TextCandidate
 
@@ -103,6 +105,20 @@ def test_substring_post_ocr_accepts_multiple_legal_fullwidth_pairs():
 
     assert passed is True
     assert results[0]["new_text_matches"] == 1
+
+@pytest.mark.parametrize("target_label", ["CS(", "CS（", "CS（a(b）)"])
+def test_substring_post_ocr_rejects_identical_invalid_parenthesis_structure(target_label):
+    edit = {
+        **_edit(match_mode="substring"),
+        "source_label": "HZ" + target_label[2:],
+        "target_label": target_label,
+    }
+    recognized = _candidate(target_label)
+
+    passed, results, _ = pipeline._post_validate((recognized,), (edit,), (100, 40))
+
+    assert passed is False
+    assert results[0]["new_text_matches"] == 0
 
 def test_substring_post_ocr_detects_old_label_with_ascii_parentheses():
     passed, results, messages = pipeline._post_validate(
