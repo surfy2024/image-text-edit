@@ -46,6 +46,23 @@ def test_substring_post_ocr_rejects_wrong_complete_label_after_parenthesis_norma
     assert results[0]["new_text_matches"] == 0
 
 
+def test_substring_post_ocr_rejects_mixed_fullwidth_open_ascii_close():
+    passed, results, _ = pipeline._post_validate(
+        (_candidate("CS26-6DPP（待建)"),), (_edit(match_mode="substring"),), (100, 40)
+    )
+
+    assert passed is False
+    assert results[0]["new_text_matches"] == 0
+
+
+def test_substring_post_ocr_rejects_mixed_ascii_open_fullwidth_close():
+    passed, results, _ = pipeline._post_validate(
+        (_candidate("CS26-6DPP(待建）"),), (_edit(match_mode="substring"),), (100, 40)
+    )
+
+    assert passed is False
+    assert results[0]["new_text_matches"] == 0
+
 def test_substring_post_ocr_detects_old_label_with_ascii_parentheses():
     passed, results, messages = pipeline._post_validate(
         (_candidate("HZ26-6DPP(待建)"),), (_edit(match_mode="substring"),), (100, 40)

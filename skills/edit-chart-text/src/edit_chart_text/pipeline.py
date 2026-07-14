@@ -642,13 +642,25 @@ def _post_geometry_match(candidate: TextCandidate, edit: dict, image_size) -> bo
     )
 
 
+def _normalize_paired_parentheses(text: str) -> str:
+    characters = list(text)
+    openers: list[int] = []
+    for index, character in enumerate(characters):
+        if character == "（":
+            openers.append(index)
+        elif character == "）" and openers:
+            opener = openers.pop()
+            characters[opener] = "("
+            characters[index] = ")"
+    return "".join(characters)
+
+
 def _post_text_matches(candidate_text: str, expected_text: str, match_mode: str) -> bool:
     candidate = candidate_text.strip()
     expected = expected_text.strip()
     if match_mode != "substring":
         return candidate == expected
-    punctuation = str.maketrans({"（": "(", "）": ")"})
-    return candidate.translate(punctuation) == expected.translate(punctuation)
+    return _normalize_paired_parentheses(candidate) == _normalize_paired_parentheses(expected)
 
 
 def _post_validate(detected, edits, image_size) -> tuple[bool,list[dict],list[str]]:
