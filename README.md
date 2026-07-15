@@ -352,6 +352,91 @@ python -m pytest -m integration skills/edit-chart-text/tests
 
 See [`skills/edit-chart-text/references/troubleshooting.md`](skills/edit-chart-text/references/troubleshooting.md) for troubleshooting details.
 
+## 智能体兼容性 / Agent compatibility
+
+`SKILL.md` 负责指导智能体，Python CLI 负责 OCR、背景修复、文字重绘与验证。即使平台原生支持 Agent Skills，也必须另外安装 CLI，并授予终端执行及图片目录读写权限。
+
+`SKILL.md` instructs the agent, while the Python CLI performs OCR, background repair, text rendering, and validation. Native Agent Skills support still requires a separate CLI installation plus terminal and image-directory permissions.
+
+| 智能体 / Agent | 支持 / Support | 推荐位置 / Recommended location |
+|---|---|---|
+| Claude Code | 原生 / Native | `~/.claude/skills/edit-chart-text` |
+| Claude.ai | 自定义 Skills / Custom Skills | 通过界面或 API 上传 / Upload through UI or API |
+| Work Buddy | 基于 Claude Code / Built on Claude Code | `.claude/skills/edit-chart-text` |
+| OpenClaw | 原生 / Native | `~/.openclaw/skills/`、`~/.agents/skills/` 或工作区 `skills/` |
+| Hermes Agent | 原生 / Native | `~/.hermes/skills/edit-chart-text` |
+
+官方参考 / Official references: [Claude Code Skills](https://code.claude.com/docs/en/skills), [Claude Skills](https://claude.com/docs/skills/overview), [Work Buddy](https://docs.work-buddy.ai/), [OpenClaw Skills](https://docs.openclaw.ai/skills), [Hermes Agent Skills](https://github.com/NousResearch/hermes-agent/blob/main/website/docs/guides/work-with-skills.md).
+
+### 共同依赖 / Shared prerequisites
+
+```powershell
+git clone https://github.com/surfy2024/image-text-edit.git
+cd image-text-edit
+python -m pip install -e .\skills\edit-chart-text
+edit-chart-text --help
+```
+
+所有平台还需要 Python 3.11+、可用的 PaddleOCR/PaddlePaddle 模型、位于 `PATH` 中的 `edit-chart-text` 命令，以及终端和图片工作目录权限。
+
+Every platform also requires Python 3.11+, available PaddleOCR/PaddlePaddle models, `edit-chart-text` on `PATH`, and permission to use the terminal and image workspace.
+
+### Claude Code / Claude.ai
+
+Claude Code 用户级安装 / User-level installation:
+
+```powershell
+New-Item -ItemType Directory -Force "$HOME\.claude\skills"
+Copy-Item -Recurse -Force .\skills\edit-chart-text "$HOME\.claude\skills\edit-chart-text"
+```
+
+也可以复制到项目的 `.claude/skills/edit-chart-text/`。Claude.ai 虽支持上传自定义 Skill，但云端环境未必能访问本机 Python、PaddleOCR 和图片路径，因此还需要执行环境及文件传输适配。
+
+You may instead use `.claude/skills/edit-chart-text/` inside a project. Claude.ai accepts custom Skills, but its hosted environment may not access local Python, PaddleOCR, or image paths, so execution and file-transfer integration may still be required.
+
+### Work Buddy
+
+Work Buddy 基于 Claude Code。将完整目录放入其项目的 `.claude/skills/edit-chart-text/`，或服务账户的 `~/.claude/skills/edit-chart-text/`，并确认其进程能调用 CLI、访问图片目录。
+
+Work Buddy is built on Claude Code. Install the complete directory in `.claude/skills/edit-chart-text/` for its project, or `~/.claude/skills/edit-chart-text/` for its service account, and verify CLI and image-directory access.
+
+### OpenClaw
+
+已有 Codex Skill 时可直接迁移 / Migrate an existing Codex skill:
+
+```powershell
+openclaw migrate plan codex
+openclaw migrate codex
+```
+
+手动共享安装 / Manual shared installation:
+
+```powershell
+New-Item -ItemType Directory -Force "$HOME\.openclaw\skills"
+Copy-Item -Recurse -Force .\skills\edit-chart-text "$HOME\.openclaw\skills\edit-chart-text"
+```
+
+单工作区可使用 `<workspace>/skills/edit-chart-text/` 或 `<workspace>/.agents/skills/edit-chart-text/`。
+
+For workspace-only visibility, use `<workspace>/skills/edit-chart-text/` or `<workspace>/.agents/skills/edit-chart-text/`.
+
+### Hermes Agent
+
+```powershell
+New-Item -ItemType Directory -Force "$HOME\.hermes\skills"
+Copy-Item -Recurse -Force .\skills\edit-chart-text "$HOME\.hermes\skills\edit-chart-text"
+hermes skills
+hermes chat -q "/edit-chart-text replace the specified text in my image"
+```
+
+请复制完整目录以保留 `SKILL.md` 与 `references/`。Copy the complete directory so `SKILL.md` and `references/` remain together.
+
+### 远程部署 / Remote deployment
+
+服务器、容器或 VPS 上的智能体无法直接读取个人电脑的 `C:`、`I:` 等路径。请上传图片、挂载共享目录或将消息附件映射为服务器路径，并仅授予必要图片目录的权限。
+
+Agents running on a server, container, or VPS cannot directly read `C:` or `I:` paths on a personal computer. Upload images, mount a shared directory, or map message attachments to server-side paths, and grant access only to the required image workspace.
+
 ## License
 
 No license file is currently included. Add a license before redistributing the project as an open-source package.
